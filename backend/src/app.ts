@@ -73,6 +73,7 @@ import {
   decideApplication,
   getOwnProviderApplication,
   listPendingApplications,
+  updateOwnProviderApplication,
 } from "./services/providerApplications.js";
 import {
   BookingActionPendingError,
@@ -703,6 +704,42 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       }
       if (error instanceof AlreadyAProviderError) {
         return c.json({ code: "ALREADY_A_PROVIDER", message: error.message }, 409);
+      }
+      throw error;
+    }
+  });
+
+  /** Correcting a pending application in place. The target is always the
+   *  caller's own newest application, so no id in the body can reach
+   *  someone else's; a decided one gets the same `409 APPLICATION_DECIDED`
+   *  `decide` already gives. */
+  app.put("/me/provider/application", requirePactlyAuth, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const int = (value: unknown) => (typeof value === "number" ? value : Number.NaN);
+    try {
+      const application = await updateOwnProviderApplication(db, c.get("walletAddress"), {
+        name: text(body?.name),
+        title: text(body?.title),
+        categoryId: text(body?.categoryId),
+        location: text(body?.location),
+        serviceDescription: text(body?.serviceDescription),
+        sessionFormat: text(body?.sessionFormat),
+        sessionLengthMinutes: int(body?.sessionLengthMinutes),
+        priceAmount: text(body?.priceAmount),
+        depositRateBps: int(body?.depositRateBps),
+        cancellationWindowHours: int(body?.cancellationWindowHours),
+      });
+      return c.json({ application });
+    } catch (error) {
+      if (error instanceof NoProviderApplicationError) {
+        return c.json({ code: "NO_APPLICATION", message: error.message }, 404);
+      }
+      if (error instanceof ProviderApplicationDecidedError) {
+        return c.json({ code: "APPLICATION_DECIDED", message: error.message }, 409);
+      }
+      if (error instanceof InvalidProviderApplicationError) {
+        return c.json({ code: "INVALID_APPLICATION", message: error.message, details: error.details }, 400);
       }
       throw error;
     }

@@ -54,6 +54,34 @@ export async function listPendingProviderApplications(db: Db): Promise<ProviderA
     .orderBy(asc(providerApplications.createdAt), asc(providerApplications.id));
 }
 
+export interface ProviderApplicationEditValues {
+  name: string;
+  title: string;
+  categoryId: string;
+  serviceDescription: string;
+  sessionFormat: string;
+  sessionLengthMinutes: number;
+  /** Integer string, smallest unit (AD-7). */
+  sessionPriceAmount: string;
+  depositRateBps: number;
+  cancellationWindowHours: number;
+}
+
+/** Corrects a still-pending application in place. Returns `false` when an
+ * admin decided it first (or it does not exist), so an edit can never
+ * overwrite an approved or rejected application. */
+export async function updatePendingProviderApplication(
+  db: Db,
+  id: string,
+  values: ProviderApplicationEditValues,
+): Promise<boolean> {
+  const result = await db
+    .update(providerApplications)
+    .set(values)
+    .where(and(eq(providerApplications.id, id), eq(providerApplications.state, "pending")));
+  return result.changes > 0;
+}
+
 export interface ProviderApplicationDecision {
   state: Exclude<ProviderApplicationState, "pending">;
   decisionByWallet: string;

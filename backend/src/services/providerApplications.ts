@@ -22,6 +22,7 @@ import {
   getProviderApplicationById,
   insertProviderApplication,
   listPendingProviderApplications,
+  updatePendingProviderApplication,
   type ProviderApplicationRow,
 } from "../db/providerApplications.js";
 import {
@@ -260,6 +261,79 @@ export async function applyAsProvider(db: Db, walletAddress: string, input: Prov
     createdAt: now,
   });
   const row = (await getProviderApplicationById(db, id))!;
+  return buildView(db, row, await categoryForRow(db, row));
+}
+
+/** `PUT /me/provider/application`: corrects the caller's own newest
+ * application while it is still pending. The target is always the wallet's
+ * newest application -- never an id from the request -- so another wallet's
+ * application is unreachable. Validation runs before any write, so an
+ * invalid edit changes nothing (neither the application nor its unapproved
+ * profile). The profile is updated too because it is what goes live on
+ * approval, and it stays unapproved: editing is not an approval. */
+export async function updateOwnProviderApplication(
+  db: Db,
+  walletAddress: string,
+  input: ProviderApplicationInput,
+): Promise<ProviderApplicationView> {
+  const latest = await getLatestProviderApplicationByWallet(db, walletAddress);
+  if (!latest) {
+    throw new NoProviderApplicationError();
+  }
+  if (latest.state !== "pending") {
+    throw new ProviderApplicationDecidedError();
+  }
+
+  const details = validateProviderApplication(input);
+  if (Object.keys(details).length === 0) {
+    const category = await getCategoryById(db, input.categoryId);
+    if (!category) {
+      details.categoryId = "Pick a category.";
+    }
+  }
+  if (Object.keys(details).length > 0) {
+    throw new InvalidProviderApplicationError(details);
+  }
+
+  const profile = await getProviderProfileByWallet(db, walletAddress);
+  if (!profile) {
+    // Unreachable in practice: applying creates the profile at the same
+    // time. Guarded rather than assumed, like the other reads in this file.
+    throw new NoProviderApplicationError();
+  }
+
+  const profileValues = {
+    categoryId: input.categoryId,
+    displayName: cleanText(input.name),
+    title: cleanText(input.title),
+    location: cleanText(input.location),
+    bio: cleanText(input.serviceDescription),
+    sessionFormat: input.sessionFormat,
+    sessionLengthMinutes: input.sessionLengthMinutes,
+    priceAmount: input.priceAmount,
+    depositRateBps: input.depositRateBps,
+    cancellationWindowHours: input.cancellationWindowHours,
+  };
+  const updated = await updatePendingProviderApplication(db, latest.id, {
+    name: profileValues.displayName,
+    title: profileValues.title,
+    categoryId: input.categoryId,
+    serviceDescription: profileValues.bio,
+    sessionFormat: input.sessionFormat,
+    sessionLengthMinutes: input.sessionLengthMinutes,
+    sessionPriceAmount: input.priceAmount,
+    depositRateBps: input.depositRateBps,
+    cancellationWindowHours: input.cancellationWindowHours,
+  });
+  if (!updated) {
+    // An admin decided the application between the read above and this
+    // write -- refuse the edit rather than touch a decided application or
+    // its live profile.
+    throw new ProviderApplicationDecidedError();
+  }
+  await updateProviderProfileFromApplication(db, profile.id, profileValues);
+
+  const row = (await getProviderApplicationById(db, latest.id))!;
   return buildView(db, row, await categoryForRow(db, row));
 }
 

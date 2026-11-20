@@ -451,6 +451,20 @@ export function useSubmitProviderApplication(session: Session | undefined) {
   });
 }
 
+export function useUpdateProviderApplication(session: Session | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ProviderApplicationInput) =>
+      apiPut<OwnProviderApplicationResponse>("/me/provider/application", input, session?.token),
+    onSuccess: (response) => {
+      queryClient.setQueryData(OWN_APPLICATION_KEY(session?.walletAddress), response.application);
+      // The same fields live on the unapproved profile; its cached view must
+      // reflect the correction (location included) without re-approving it.
+      void queryClient.invalidateQueries({ queryKey: OWN_PROVIDER_KEY(session?.walletAddress) });
+    },
+  });
+}
+
 export function useAdminApplications(session: Session | undefined) {
   return useQuery({
     queryKey: ["admin", "applications", session?.walletAddress],
