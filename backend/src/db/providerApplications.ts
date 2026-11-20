@@ -1,6 +1,6 @@
 import { asc, desc, and, eq } from "drizzle-orm";
 
-import type { Db } from "./client.js";
+import type { Db, DbOrTx } from "./client.js";
 import { providerApplications, type ProviderApplicationState } from "./schema.js";
 
 export type ProviderApplicationRow = typeof providerApplications.$inferSelect;
@@ -65,7 +65,11 @@ export interface ProviderApplicationDecision {
  * when the row was already decided (or does not exist), so a second admin
  * click can never overwrite the first decision. */
 export async function decideProviderApplication(db: Db, id: string, decision: ProviderApplicationDecision): Promise<boolean> {
-  const result = await db
+  return decideProviderApplicationSync(db, id, decision);
+}
+
+export function decideProviderApplicationSync(db: DbOrTx, id: string, decision: ProviderApplicationDecision): boolean {
+  const result = db
     .update(providerApplications)
     .set({
       state: decision.state,
@@ -73,6 +77,7 @@ export async function decideProviderApplication(db: Db, id: string, decision: Pr
       decisionAt: decision.decisionAt,
       rejectionReason: decision.rejectionReason ?? null,
     })
-    .where(and(eq(providerApplications.id, id), eq(providerApplications.state, "pending")));
+    .where(and(eq(providerApplications.id, id), eq(providerApplications.state, "pending")))
+    .run();
   return result.changes > 0;
 }

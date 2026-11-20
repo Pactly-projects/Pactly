@@ -1,6 +1,6 @@
 import { and, count, eq, inArray, or, sql } from "drizzle-orm";
 
-import type { Db } from "./client.js";
+import type { Db, DbOrTx } from "./client.js";
 import { categories, providerProfiles } from "./schema.js";
 
 export type ProviderProfileRow = typeof providerProfiles.$inferSelect;
@@ -223,7 +223,11 @@ export async function updateProviderProfileFromApplication(
 /** Story 4.2: the one write that puts a profile on (or off) the
  * marketplace. */
 export async function setProviderProfileApproved(db: Db, id: string, isApproved: boolean): Promise<void> {
-  const result = await db.update(providerProfiles).set({ isApproved }).where(eq(providerProfiles.id, id));
+  setProviderProfileApprovedSync(db, id, isApproved);
+}
+
+export function setProviderProfileApprovedSync(db: DbOrTx, id: string, isApproved: boolean): void {
+  const result = db.update(providerProfiles).set({ isApproved }).where(eq(providerProfiles.id, id)).run();
   if (result.changes === 0) {
     throw new TypeError(`No provider profile exists with id "${id}"`);
   }

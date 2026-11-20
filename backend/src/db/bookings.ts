@@ -351,21 +351,25 @@ export async function setEscrowFundTxHash(db: Db, id: string, txHash: string): P
 export type EscrowActionKind = "complete" | "approve" | "release" | "dispute" | "resolve";
 
 export async function setEscrowActionTxHash(db: Db, id: string, action: EscrowActionKind, txHash: string): Promise<void> {
+  setEscrowActionTxHashSync(db, id, action, txHash);
+}
+
+export function setEscrowActionTxHashSync(db: DbOrTx, id: string, action: EscrowActionKind, txHash: string): void {
   switch (action) {
     case "complete":
-      await db.update(bookings).set({ escrowCompleteTxHash: txHash }).where(eq(bookings.id, id));
+      db.update(bookings).set({ escrowCompleteTxHash: txHash }).where(eq(bookings.id, id)).run();
       return;
     case "approve":
-      await db.update(bookings).set({ escrowApproveTxHash: txHash }).where(eq(bookings.id, id));
+      db.update(bookings).set({ escrowApproveTxHash: txHash }).where(eq(bookings.id, id)).run();
       return;
     case "release":
-      await db.update(bookings).set({ escrowReleaseTxHash: txHash }).where(eq(bookings.id, id));
+      db.update(bookings).set({ escrowReleaseTxHash: txHash }).where(eq(bookings.id, id)).run();
       return;
     case "dispute":
-      await db.update(bookings).set({ escrowDisputeTxHash: txHash }).where(eq(bookings.id, id));
+      db.update(bookings).set({ escrowDisputeTxHash: txHash }).where(eq(bookings.id, id)).run();
       return;
     case "resolve":
-      await db.update(bookings).set({ escrowResolveTxHash: txHash }).where(eq(bookings.id, id));
+      db.update(bookings).set({ escrowResolveTxHash: txHash }).where(eq(bookings.id, id)).run();
       return;
   }
 }

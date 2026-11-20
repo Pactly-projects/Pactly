@@ -578,6 +578,23 @@ export const webauthnChallenges = sqliteTable("webauthn_challenges", {
   expiresAt: integer("expires_at").notNull(),
 });
 
+export const ADMIN_DECISION_ACTIONS = ["approve-application", "reject-application", "resolve-dispute"] as const;
+export type AdminDecisionAction = (typeof ADMIN_DECISION_ACTIONS)[number];
+
+/** An append-only record of every admin decision: who decided, what they did,
+ * which target it applied to, the reason they submitted, and when. Written in
+ * the same DB transaction as the decision itself so a failed decision never
+ * leaves a row behind. */
+export const adminDecisionAudit = sqliteTable("admin_decision_audit", {
+  id: text("id").primaryKey(),
+  adminWallet: text("admin_wallet").notNull(),
+  action: text("action", { enum: ADMIN_DECISION_ACTIONS }).notNull(),
+  targetId: text("target_id").notNull(),
+  reason: text("reason"),
+  /** UTC epoch milliseconds. */
+  decidedAt: integer("decided_at").notNull(),
+});
+
 export const escrowDisputeOpenings = sqliteTable("escrow_dispute_openings", {
   bookingId: text("booking_id").primaryKey(),
   contractId: text("contract_id").notNull(),

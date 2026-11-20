@@ -9,7 +9,7 @@
  */
 import { eq, inArray } from "drizzle-orm";
 
-import type { Db } from "./client.js";
+import type { Db, DbOrTx } from "./client.js";
 import { escrowDisputeResolutions, type DisputeOutcome } from "./schema.js";
 
 export interface NewEscrowDisputeResolution {
@@ -31,13 +31,17 @@ export interface NewEscrowDisputeResolution {
  * job, checked before this is ever called -- this function only ever
  * touches its own table. */
 export async function recordEscrowDisputeResolution(db: Db, values: NewEscrowDisputeResolution): Promise<void> {
-  await db
-    .insert(escrowDisputeResolutions)
+  recordEscrowDisputeResolutionSync(db, values);
+}
+
+export function recordEscrowDisputeResolutionSync(db: DbOrTx, values: NewEscrowDisputeResolution): void {
+  db.insert(escrowDisputeResolutions)
     .values(values)
     .onConflictDoUpdate({
       target: escrowDisputeResolutions.bookingId,
       set: { contractId: values.contractId, outcome: values.outcome, txHash: values.txHash, decidedAt: values.decidedAt },
-    });
+    })
+    .run();
 }
 
 export type EscrowDisputeResolutionRow = typeof escrowDisputeResolutions.$inferSelect;

@@ -16,8 +16,9 @@ import { randomUUID } from "node:crypto";
 
 import { getCategoryById, type CategoryRow } from "../db/categories.js";
 import type { Db } from "../db/client.js";
+import { insertAdminDecisionAuditSync } from "../db/adminDecisionAudit.js";
 import {
-  decideProviderApplication,
+  decideProviderApplicationSync,
   getLatestProviderApplicationByWallet,
   getProviderApplicationById,
   insertProviderApplication,
@@ -27,7 +28,7 @@ import {
 import {
   getProviderProfileByWallet,
   insertProviderProfile,
-  setProviderProfileApproved,
+  setProviderProfileApprovedSync,
   updateProviderProfileFromApplication,
 } from "../db/providerProfiles.js";
 import type { ProviderApplicationState } from "../db/schema.js";
@@ -286,7 +287,9 @@ export type ProviderApplicationOutcome = "approve" | "reject";
 
 /** `POST /admin/applications/:id/decide`. Approving puts the applicant's
  * profile on the marketplace immediately (Story 4.2 AC3); rejecting needs
- * a reason (AC2) and leaves the profile unapproved. */
+ * a reason (AC2) and leaves the profile unapproved. The decision and its
+ * audit row are written in the same transaction so a failed decision writes
+ * nothing. */
 export async function decideApplication(
   db: Db,
   id: string,
@@ -307,25 +310,39 @@ export async function decideApplication(
   }
 
   const profile = await getProviderProfileByWallet(db, row.walletAddress);
-  if (outcome === "approve") {
-    if (!profile) {
-      // The profile is created at application time; a missing one means
-      // the database was edited by hand. Refuse rather than approve a
-      // listing that cannot exist.
-      throw new ProviderApplicationNotFoundError();
-    }
-    await setProviderProfileApproved(db, profile.id, true);
+  if (outcome === "approve" && !profile) {
+    // The profile is created at application time; a missing one means
+    // the database was edited by hand. Refuse rather than approve a
+    // listing that cannot exist.
+    throw new ProviderApplicationNotFoundError();
   }
 
-  const decided = await decideProviderApplication(db, id, {
-    state: outcome === "approve" ? "approved" : "rejected",
-    decisionByWallet: adminWallet,
-    decisionAt: Date.now(),
-    rejectionReason: outcome === "reject" ? cleanReason : undefined,
+  const decisionAt = Date.now();
+  const state: Exclude<ProviderApplicationState, "pending"> = outcome === "approve" ? "approved" : "rejected";
+  const auditReason = outcome === "reject" ? cleanReason : cleanReason.length > 0 ? cleanReason : null;
+
+  db.transaction((tx) => {
+    if (outcome === "approve" && profile) {
+      setProviderProfileApprovedSync(tx, profile.id, true);
+    }
+    const decided = decideProviderApplicationSync(tx, id, {
+      state,
+      decisionByWallet: adminWallet,
+      decisionAt,
+      rejectionReason: outcome === "reject" ? cleanReason : undefined,
+    });
+    if (!decided) {
+      throw new ProviderApplicationDecidedError();
+    }
+    insertAdminDecisionAuditSync(tx, {
+      adminWallet,
+      action: outcome === "approve" ? "approve-application" : "reject-application",
+      targetId: id,
+      reason: auditReason,
+      decidedAt: decisionAt,
+    });
   });
-  if (!decided) {
-    throw new ProviderApplicationDecidedError();
-  }
+
   const updated = (await getProviderApplicationById(db, id))!;
   return { ...(await buildView(db, updated, await categoryForRow(db, updated))), walletAddress: updated.walletAddress };
 }

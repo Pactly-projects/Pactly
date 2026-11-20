@@ -147,6 +147,14 @@ const STATEMENTS: readonly string[] = [
   )`,
   // Passkey pivot: users with an embedded custodial account, their passkey
   // credentials, and the consume-once WebAuthn challenges.
+  `CREATE TABLE IF NOT EXISTS admin_decision_audit (
+    id TEXT PRIMARY KEY,
+    admin_wallet TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    reason TEXT,
+    decided_at INTEGER NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL DEFAULT '',
@@ -244,6 +252,7 @@ export function runMigrations(sqlite: Database): void {
     sqlite.exec(`ALTER TABLE availability_slots ADD COLUMN withdrawn_at INTEGER`);
   }
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_bookings_slot_id ON bookings(slot_id)`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_admin_decision_audit_decided_at ON admin_decision_audit(decided_at DESC, id DESC)`);
   // Story 3.6: one stored txHash per new action, mirroring the escrow_deploy_
   // tx_hash/escrow_fund_tx_hash columns Story 3.4 already added this same way.
   if (!hasColumn(sqlite, "bookings", "escrow_complete_tx_hash")) {
