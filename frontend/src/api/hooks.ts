@@ -10,6 +10,7 @@ import type {
   BalancePaymentSubmitResponse,
   BookingView,
   CategoriesResponse,
+  CloseProviderDateResponse,
   DiscoverFiltersParams,
   DisputeOutcome,
   DisputeReason,
@@ -165,6 +166,22 @@ export function useUpdateProviderAvailability(session: Session | undefined) {
       queryClient.setQueryData(OWN_PROVIDER_KEY(session?.walletAddress), profile);
     },
   });
+}
+
+/** `POST /me/provider/availability/close-date` -- closes one local calendar
+ * date: its unpaid holds are released (no deposit is taken from those
+ * clients) and its open slots are removed. A funded booking is never
+ * released; the response names it in `needsResolution`. */
+export function closeProviderDate(
+  date: string,
+  session: Session,
+  tzOffsetMinutes = new Date().getTimezoneOffset(),
+): Promise<CloseProviderDateResponse> {
+  return apiPost<CloseProviderDateResponse>(
+    "/me/provider/availability/close-date",
+    { date, tzOffsetMinutes },
+    session.token,
+  );
 }
 
 // ---------------------------------------------------------------------------

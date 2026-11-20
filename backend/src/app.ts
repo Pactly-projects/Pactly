@@ -106,6 +106,7 @@ import {
   submitSignedTransaction,
   type BuildBalancePaymentDeps,
 } from "./services/booking.js";
+import { InvalidCloseDateError, closeProviderDate } from "./services/availability.js";
 import { EscrowApiError, EscrowConfigError, EscrowRequestError } from "./escrow/trustless-work/errors.js";
 import { defaultEscrowAdapter } from "./escrow/trustless-work/client.js";
 import type { EscrowAdapter } from "./escrow/interface.js";
@@ -654,6 +655,30 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       }
       if (error instanceof InvalidAvailabilitySlotsError) {
         return c.json({ code: "INVALID_SLOTS", message: error.message, details: error.details }, 400);
+      }
+      throw error;
+    }
+  });
+
+  /** Closing a whole date: releases that date's still-active unpaid holds
+   * (they get `shop-closed-date`, so their clients see why) and removes its
+   * future open slots. A funded booking is never released; it comes back in
+   * `needsResolution` for the provider panel to point at. Other dates are
+   * untouched. */
+  app.post("/me/provider/availability/close-date", requirePactlyAuth, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    try {
+      const result = await closeProviderDate(db, c.get("walletAddress"), {
+        date: typeof body?.date === "string" ? body.date : "",
+        ...(typeof body?.tzOffsetMinutes === "number" ? { tzOffsetMinutes: body.tzOffsetMinutes } : {}),
+      });
+      return c.json(result);
+    } catch (error) {
+      if (error instanceof InvalidCloseDateError) {
+        return c.json({ code: "INVALID_DATE", message: error.message, details: error.details }, 400);
+      }
+      if (error instanceof NotAProviderError) {
+        return c.json({ code: "NOT_A_PROVIDER", message: error.message }, 404);
       }
       throw error;
     }

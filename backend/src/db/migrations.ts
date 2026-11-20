@@ -73,6 +73,8 @@ const STATEMENTS: readonly string[] = [
     escrow_contract_id TEXT,
     slot_id TEXT REFERENCES availability_slots(id),
     hold_expires_at INTEGER,
+    hold_released_at INTEGER,
+    hold_release_reason TEXT,
     escrow_deploy_xdr TEXT,
     escrow_deploy_tx_hash TEXT,
     escrow_fund_tx_hash TEXT,
@@ -221,6 +223,14 @@ export function runMigrations(sqlite: Database): void {
   }
   if (!hasColumn(sqlite, "bookings", "hold_expires_at")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN hold_expires_at INTEGER`);
+  }
+  // Close-date hold release: both nullable, so every pre-existing booking
+  // simply has no early hold release recorded.
+  if (!hasColumn(sqlite, "bookings", "hold_released_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN hold_released_at INTEGER`);
+  }
+  if (!hasColumn(sqlite, "bookings", "hold_release_reason")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN hold_release_reason TEXT`);
   }
   if (!hasColumn(sqlite, "bookings", "escrow_deploy_xdr")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN escrow_deploy_xdr TEXT`);

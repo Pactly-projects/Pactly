@@ -5,7 +5,13 @@ import { CalendarBlankIcon } from "@phosphor-icons/react";
 import { ApiError } from "../../api/client";
 import { PageMasthead } from "../../components/PageMasthead";
 import { SignInPanel } from "../../components/SignInPanel";
-import { useOwnProviderProfile, useTryRate, useUpdateProviderAvailability, useUpdateProviderRules } from "../../api/hooks";
+import {
+  closeProviderDate,
+  useOwnProviderProfile,
+  useTryRate,
+  useUpdateProviderAvailability,
+  useUpdateProviderRules,
+} from "../../api/hooks";
 import { TryAmount } from "../../components/TryAmount";
 import { tryToUsdcSmallestUnit, usdcToTry } from "../../lib/money";
 import { getSession, signOut, type Session } from "../../wallet";
@@ -116,6 +122,10 @@ export function AvailabilityPage() {
   const [depositRatePercentInput, setDepositRatePercentInput] = useState("");
   const [cancellationWindowInput, setCancellationWindowInput] = useState("");
   const [selectedSlots, setSelectedSlots] = useState<Set<number>>(new Set());
+  const [closeDate, setCloseDate] = useState("");
+  const [closeBusy, setCloseBusy] = useState(false);
+  const [closeResult, setCloseResult] = useState<Awaited<ReturnType<typeof closeProviderDate>> | undefined>();
+  const [closeError, setCloseError] = useState<string | undefined>();
 
   // Seeds local form state only the first time a profile loads, or when it
   // switches to a *different* profile (a new sign-in) -- never on every
@@ -212,6 +222,27 @@ export function AvailabilityPage() {
     } catch {
       // Surfaced through `updateAvailability.error`/`availabilityErrorDetails`/
       // `availabilityGenericError` below -- nothing further to do here.
+    }
+  }
+
+  async function handleCloseDate(): Promise<void> {
+    if (!session || !closeDate) return;
+    setCloseBusy(true);
+    setCloseError(undefined);
+    setCloseResult(undefined);
+    try {
+      const result = await closeProviderDate(closeDate, session);
+      setCloseResult(result);
+      // The closed date's slots are gone server-side -- refresh the grid so
+      // the panel stops showing them as selected.
+      const refreshed = await profileQuery.refetch();
+      if (refreshed.data) {
+        setSelectedSlots(new Set(refreshed.data.slots));
+      }
+    } catch (error) {
+      setCloseError(error instanceof ApiError ? error.message : "Connection dropped. Nothing changed.");
+    } finally {
+      setCloseBusy(false);
     }
   }
 
@@ -395,6 +426,50 @@ export function AvailabilityPage() {
         >
           {updateAvailability.isPending ? "Saving…" : "Save availability"}
         </button>
+      </section>
+
+      <section className="card" style={{ marginTop: "var(--space-6)" }}>
+        <h2 style={{ fontSize: "var(--text-18)", marginTop: 0 }}>Close a whole date</h2>
+        <p>
+          Closing a date removes its open slots and releases any unpaid holds on that date. Those clients see that you
+          closed the date, and no deposit is taken from them. A booking whose deposit is already locked is never released
+          — resolve it from Bookings.
+        </p>
+        <div className="field">
+          <label htmlFor="close-date">Date to close</label>
+          <input id="close-date" type="date" value={closeDate} onChange={(event) => setCloseDate(event.target.value)} />
+        </div>
+        <button
+          type="button"
+          className="button-primary"
+          onClick={() => void handleCloseDate()}
+          disabled={closeBusy || closeDate === ""}
+        >
+          {closeBusy ? "Closing…" : "Close this date"}
+        </button>
+
+        {closeError && (
+          <div className="banner banner--alert" role="alert" style={{ marginTop: "var(--space-4)" }}>
+            {closeError}
+          </div>
+        )}
+        {closeResult && (
+          <div className="banner" role="status" style={{ marginTop: "var(--space-4)" }}>
+            <p>
+              Closed {closeResult.date}. {closeResult.releasedHoldCount} unpaid{" "}
+              {closeResult.releasedHoldCount === 1 ? "hold was" : "holds were"} released — no deposit was taken.{" "}
+              {closeResult.closedSlotCount} open {closeResult.closedSlotCount === 1 ? "slot was" : "slots were"} removed.
+            </p>
+            {closeResult.needsResolution.length > 0 && (
+              <p>
+                {closeResult.needsResolution.length === 1
+                  ? "1 booking already has a deposit locked and was not released."
+                  : `${closeResult.needsResolution.length} bookings already have a deposit locked and were not released.`}{" "}
+                <Link to="/panel/bookings">Resolve from Bookings.</Link>
+              </p>
+            )}
+          </div>
+        )}
       </section>
     </div>
   );

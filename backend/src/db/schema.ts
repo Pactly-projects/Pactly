@@ -130,6 +130,13 @@ export type EscrowState = (typeof ESCROW_STATES)[number];
 export const BALANCE_STATES = ["unpaid", "paid_platform", "paid_cash"] as const;
 export type BalanceState = (typeof BALANCE_STATES)[number];
 
+/** Why an unpaid hold ended before its own clock ran out. Today the only
+ * cause is a shop closing that whole date; a released hold is expired
+ * (`holdExpiresAt` set to the release moment) so the slot is free again,
+ * and the client-facing views read this reason to say so plainly. */
+export const HOLD_RELEASE_REASONS = ["shop-closed-date"] as const;
+export type HoldReleaseReason = (typeof HOLD_RELEASE_REASONS)[number];
+
 /**
  * A booking, matched to the on-chain `booking_id` (AD-13's ULID, stored
  * here as 32 lowercase hex characters -- the same 16 bytes the contract's
@@ -206,6 +213,15 @@ export const bookings = sqliteTable("bookings", {
    * the client already signed must still be allowed to land.
    */
   holdExpiresAt: integer("hold_expires_at"),
+  /**
+   * Set when a shop's close-date action released this unpaid hold early, and
+   * why. Both stay `null` for a hold that merely ran out on its own clock
+   * (and for every locked booking, which that action never touches), so the
+   * client-facing copy can tell "the shop closed this date" apart from a
+   * plain expiry. UTC epoch seconds.
+   */
+  holdReleasedAt: integer("hold_released_at"),
+  holdReleaseReason: text("hold_release_reason", { enum: HOLD_RELEASE_REASONS }),
   /**
    * Story 3.4: the unsigned deploy XDR `lockDeposit` built for the
    * currently-persisted `escrowContractId`, stored so a retried `lock` call

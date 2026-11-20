@@ -131,8 +131,12 @@ export function BookingPage() {
   const formatTryAmount = useFormatTry();
 
   const isLocked = phase === "locked";
+  // Polled from the moment a hold exists, not only once the lock flow is
+  // running: a shop can close this date while the client is still deciding,
+  // and this is how the page learns the hold was released (no deposit was
+  // taken) without waiting for its own countdown to run out.
   const booking = useBooking(hold?.bookingId, session, {
-    enabled: phase === "reconciling" || phase === "reconciling-slow" || isLocked,
+    enabled: Boolean(hold?.bookingId && session),
   });
 
   const prefersReducedMotion = useMemo(
@@ -165,6 +169,23 @@ export function BookingPage() {
       engineRef.current = {};
     }
   }, [phase, hold, holdSecondsLeft]);
+
+  // The shop closed this whole date and the backend released this unpaid
+  // hold. Drop the local hold so the payment steps disappear and say
+  // plainly that no deposit was taken -- never leave the countdown implying
+  // the slot can still be paid for.
+  useEffect(() => {
+    if (!hold || booking.data?.holdReleasedReason !== "shop-closed-date") return;
+    setHold(undefined);
+    setLocalDeposit(undefined);
+    setLocalNotice(undefined);
+    setHoldEndedWhileIdle(false);
+    setHoldError({ message: "The shop closed this date. No deposit was taken." });
+    engineRef.current = {};
+    if (phase !== "locked") {
+      setPhase("idle");
+    }
+  }, [hold, booking.data?.holdReleasedReason, phase]);
 
   // Once the reconciler confirms `locked`, the seal is allowed to stamp --
   // never on a submit response alone (the spec's own "Always" rule).

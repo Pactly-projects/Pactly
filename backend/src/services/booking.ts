@@ -1415,6 +1415,11 @@ export interface BookingView {
   /** Story 3.6 (review round): see {@link derivePendingAction}. */
   pendingAction: EscrowActionKind | null;
   holdExpiresAt: number | null;
+  /** Set only when the shop closed this date and released this unpaid
+   * hold early (`shop-closed-date`); `null` for a plain expiry or a locked
+   * booking. Drives the client's "the shop closed this date, no deposit was
+   * taken" copy. */
+  holdReleasedReason: BookingRow["holdReleaseReason"];
   contractId: string | null;
   deposit: Money;
   balance: Money;
@@ -1448,6 +1453,7 @@ export async function getBookingView(db: Db, bookingId: string, walletAddress: s
     lifecycle: { contractId: lifecycle.contractId, action: lifecycle.action, outcome: lifecycle.outcome },
     pendingAction: derivePendingAction(booking, lifecycle.action),
     holdExpiresAt: booking.holdExpiresAt,
+    holdReleasedReason: booking.holdReleaseReason,
     contractId: booking.escrowContractId,
     deposit: { amount: booking.depositAmount, asset: ASSET },
     balance: { amount: booking.balanceAmount, asset: ASSET },
@@ -1702,6 +1708,9 @@ export interface BookingListItemBase {
   cancelDeadline: number;
   contractId: string | null;
   holdExpiresAt: number | null;
+  /** Set when a shop's close-date action released this unpaid hold early;
+   * the client's card says so instead of showing a bare expiry. */
+  holdReleasedReason: BookingRow["holdReleaseReason"];
   /** The AD-13 hold's own 10-minute window has passed with `escrowState`
    * still `null` -- the spec's own "Always" rule: "An expired, never-funded
    * hold is listed under 'Expired holds' (collapsed), never as a booking."
@@ -1761,6 +1770,7 @@ function toBookingListItemBase(
     cancelDeadline: booking.cancelDeadline,
     contractId: booking.escrowContractId,
     holdExpiresAt: booking.holdExpiresAt,
+    holdReleasedReason: booking.holdReleaseReason,
     isExpiredHold: isExpiredHoldRow(booking, now),
   };
 }

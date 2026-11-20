@@ -14,6 +14,18 @@ export interface Category {
   slug: string;
 }
 
+export interface CloseProviderDateResponse {
+  date: string;
+  /** UTC epoch seconds of the local day's start/end. */
+  rangeStart: number;
+  rangeEnd: number;
+  releasedHoldCount: number;
+  releasedBookingIds: string[];
+  closedSlotCount: number;
+  /** Funded bookings left alone -- the shop resolves these from Bookings. */
+  needsResolution: Array<{ bookingId: string; slotStartsAt: number }>;
+}
+
 /** `GET /categories`'s Story 3.2 shape -- every category plus
  * `providerCount` (approved providers only). */
 export interface CategoryWithProviderCount extends Category {
@@ -158,6 +170,9 @@ export interface BookingView {
   lifecycle: { contractId?: string; action?: EscrowLifecycleAction; outcome?: "refund-client" | "pay-provider" };
   pendingAction: PendingActionKind;
   holdExpiresAt: number | null;
+  /** `"shop-closed-date"` only when the shop closed this date and released
+   * this unpaid hold early -- no deposit was taken. */
+  holdReleasedReason: "shop-closed-date" | null;
   contractId: string | null;
   deposit: Money;
   balance: Money;
@@ -205,6 +220,9 @@ export interface BookingListItemBase {
   contractId: string | null;
   /** UTC epoch seconds. */
   holdExpiresAt: number | null;
+  /** `"shop-closed-date"` when the shop closed this date and released this
+   * unpaid hold early -- the client's card says no deposit was taken. */
+  holdReleasedReason: "shop-closed-date" | null;
   /** The AD-13 hold's own window has passed with no chain evidence at all --
    * shown under a separate, collapsed "Expired holds" group, never mixed
    * into the main list (the spec's own "Always" rule). */
