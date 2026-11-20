@@ -25,7 +25,7 @@ ANCHOR_QUOTE_SERVER="https://tr-mock-anchor.fly.dev/sep38"
 code="USDC"
 issuer="${USDC_ISSUER}"
 `;
-const SEP38_INFO_BODY = { assets: [{ asset: SELL_ASSET }, { asset: "iso4217:TRY" }] };
+const SEP38_INFO_BODY = { assets: [{ asset: SELL_ASSET }, { asset: "iso4217:TRY", decimals: 2 }] };
 
 function resetCaches(): void {
   resetSep38CacheForTests();
@@ -56,9 +56,10 @@ test("GET /rate returns TRY per 1 USDC from a 1-USDC SEP-38 price, cached across
     const app = createApp(result.db, { rateFetchImpl: makeFetch(state) });
     const first = await app.request("/rate");
     assert.equal(first.status, 200);
-    const body = (await first.json()) as { rate: string; currency: string; quotedAt: number };
+    const body = (await first.json()) as { rate: string; currency: string; decimals: number; quotedAt: number };
     assert.equal(body.rate, "41.20");
     assert.equal(body.currency, "TRY");
+    assert.equal(body.decimals, 2);
     assert.equal(typeof body.quotedAt, "number");
     assert.ok(state.priceUrls[0]?.includes("sell_amount=1.0000000"));
 

@@ -5,9 +5,9 @@ import { CalendarBlankIcon } from "@phosphor-icons/react";
 import { ApiError } from "../../api/client";
 import { PageMasthead } from "../../components/PageMasthead";
 import { SignInPanel } from "../../components/SignInPanel";
-import { useOwnProviderProfile, useTryRate, useUpdateProviderAvailability, useUpdateProviderRules } from "../../api/hooks";
-import { TryAmount } from "../../components/TryAmount";
-import { tryToUsdcSmallestUnit, usdcToTry } from "../../lib/money";
+import { useOwnProviderProfile, useLocalCurrencyRate, useUpdateProviderAvailability, useUpdateProviderRules } from "../../api/hooks";
+import { LocalAmount } from "../../components/LocalAmount";
+import { localCurrencyToUsdcSmallestUnit, usdcToLocalCurrency, LOCAL_CURRENCY_UNAVAILABLE } from "../../lib/money";
 import { getSession, signOut, type Session } from "../../wallet";
 
 const GRID_DAYS = 14;
@@ -103,14 +103,15 @@ export function AvailabilityPage() {
   const profileQuery = useOwnProviderProfile(session);
   const updateRules = useUpdateProviderRules(session);
   const updateAvailability = useUpdateProviderAvailability(session);
-  const { rate } = useTryRate();
+  const localCurrency = useLocalCurrencyRate();
 
-  // The price is stored in USDC smallest units (AD-7) but typed in TRY.
-  // Until the provider actually edits the field, what it shows is *derived*
-  // from the stored amount at the current rate (so a rate that arrives
-  // after the first paint still updates it), and saving resubmits the
-  // stored string untouched -- an unedited price must never drift by a
-  // rounding or a rate move between display and save.
+  // The price is stored in USDC smallest units (AD-7) but typed in the
+  // anchor's local currency, with the anchor's own decimals. Until the
+  // provider actually edits the field, what it shows is *derived* from the
+  // stored amount at the current rate (so a rate that arrives after the
+  // first paint still updates it), and saving resubmits the stored string
+  // untouched -- an unedited price must never drift by a rounding or a
+  // rate move between display and save.
   const [priceInput, setPriceInput] = useState("");
   const [priceEdited, setPriceEdited] = useState(false);
   const [depositRatePercentInput, setDepositRatePercentInput] = useState("");
@@ -146,8 +147,21 @@ export function AvailabilityPage() {
   }
 
   const storedPrice = profileQuery.data?.price.amount;
-  const priceText = priceEdited ? priceInput : storedPrice !== undefined ? usdcToTry(storedPrice, rate) : "";
-  const priceSmallestUnit = priceEdited ? tryToUsdcSmallestUnit(priceInput, rate) : storedPrice;
+  const priceText = priceEdited
+    ? priceInput
+    : storedPrice !== undefined && localCurrency
+      ? usdcToLocalCurrency(storedPrice, localCurrency.rate, localCurrency.decimals)
+      : "";
+  const priceSmallestUnit = priceEdited
+    ? localCurrency
+      ? localCurrencyToUsdcSmallestUnit(
+          priceInput,
+          localCurrency.rate,
+          localCurrency.currency,
+          localCurrency.decimals,
+        )
+      : undefined
+    : storedPrice;
   // Basis points on the wire (`depositRateBps`), a percentage on screen.
   const depositRatePercent = Number(depositRatePercentInput);
   const depositRateBps = Number.isFinite(depositRatePercent) ? Math.round(depositRatePercent * 100) : Number.NaN;
@@ -294,7 +308,7 @@ export function AvailabilityPage() {
         )}
         <form onSubmit={handleSaveRules}>
           <div className="field">
-            <label htmlFor="price">Session price (TRY)</label>
+            <label htmlFor="price">Session price{localCurrency ? ` (${localCurrency.currency})` : ""}</label>
             <input
               id="price"
               inputMode="decimal"
@@ -304,8 +318,11 @@ export function AvailabilityPage() {
                 setPriceInput(event.target.value);
               }}
             />
-            {priceEdited && priceInput.trim() !== "" && !priceSmallestUnit && (
-              <span className="field__error">Enter an amount in lira, up to two decimals.</span>
+            {!localCurrency && <span className="field__error">{LOCAL_CURRENCY_UNAVAILABLE}</span>}
+            {localCurrency && priceEdited && priceInput.trim() !== "" && !priceSmallestUnit && (
+              <span className="field__error">
+                Enter an amount in {localCurrency.currency}, up to {localCurrency.decimals} decimals.
+              </span>
             )}
             {rulesErrorDetails?.priceAmount && <span className="field__error">{rulesErrorDetails.priceAmount}</span>}
           </div>
@@ -335,7 +352,7 @@ export function AvailabilityPage() {
           </div>
 
           <p className="tabular-nums">
-            Deposit preview: {deposit ? <TryAmount amount={deposit} /> : "--"} (the saved amount comes back from the server once you
+            Deposit preview: {deposit ? <LocalAmount amount={deposit} /> : "--"} (the saved amount comes back from the server once you
             save)
           </p>
 

@@ -323,8 +323,9 @@ export const bookings = sqliteTable("bookings", {
   anchorDepositBankDetails: text("anchor_deposit_bank_details"),
   /** UTC epoch seconds -- the anchor's own expiry, when it supplied one. */
   anchorDepositExpiresAt: integer("anchor_deposit_expires_at"),
-  /** The amount the sandbox simulate endpoint should replay (the TRY the
-   * client is meant to send), captured from the open/poll response. */
+  /** The amount the sandbox simulate endpoint should replay (the local
+   * currency the client is meant to send), captured from the open/poll
+   * response. */
   anchorDepositAmountIn: text("anchor_deposit_amount_in"),
   /** UTC epoch seconds -- last successful poll (or open). */
   anchorDepositUpdatedAt: integer("anchor_deposit_updated_at"),

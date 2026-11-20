@@ -21,12 +21,12 @@
  *    mirroring `usdc.ts`'s "resolved once and cached" discipline -- it
  *    almost never changes within a process's lifetime;
  *  - the *price* itself is cached briefly (about 60 seconds), keyed by the
- *    pair and the amount rounded to the fiat's own display precision (2
- *    decimal places for USDC, per the anchor's `stellar.toml` currency
- *    entry) -- fine enough that no card ever shows a stale cent, coarse
- *    enough that a Discover page full of cards showing visually identical
- *    amounts does not hammer the anchor with one request per pixel of
- *    difference below what anyone can see.
+ *    pair and the amount rounded to the fiat's own display precision (the
+ *    anchor's reported `decimals`, never a fixed 2) -- fine enough that no
+ *    card ever shows a stale cent, coarse enough that a Discover page full
+ *    of cards showing visually identical amounts does not hammer the
+ *    anchor with one request per pixel of difference below what anyone
+ *    can see.
  */
 import { config } from "../config.js";
 import { AnchorQuoteUnavailableError, AnchorQuoteUnsupportedError } from "./errors.js";
@@ -40,11 +40,15 @@ const PRICE_CACHE_TTL_MS = 60_000;
  * matching `frontend/src/lib/money.ts` and `escrow/trustless-work/
  * reconciler.ts`'s `humanDecimalToSmallestUnits`. */
 const SMALLEST_UNIT_DECIMALS = 7;
-/** The anchor's own USDC `display_decimals` (its `stellar.toml`'s
- * `[[CURRENCIES]]` entry) -- also the granularity the price cache rounds
- * to, since no display ever shows finer than this. */
-const DISPLAY_DECIMALS = 2;
-const CACHE_ROUNDING_UNIT = 10n ** BigInt(SMALLEST_UNIT_DECIMALS - DISPLAY_DECIMALS);
+/** The anchor reports its fiat asset's display precision as SEP-38's
+ * `decimals` (on `/prices`, or on an `/info` entry when the anchor chooses
+ * to include it). There is deliberately no default: inventing 2 would be
+ * exactly the fixed-decimal assumption this module must not make. */
+const MAX_FIAT_DECIMALS = 7;
+
+function cacheRoundingUnit(decimals: number): bigint {
+  return 10n ** BigInt(Math.max(0, SMALLEST_UNIT_DECIMALS - decimals));
+}
 
 /** Minimal shape this module needs from `fetch` -- a superset of
  * `stellar-toml.ts`'s `FetchLike` (adds `.json()`), so the one seam a
@@ -115,12 +119,71 @@ interface AnchorQuoteConfig {
   /** The fiat currency code, read from the anchor's own `sep38/info` --
    * never hard-coded (NFR12). */
   currency: string;
+  /** The fiat asset's display precision, as reported by the anchor (SEP-38
+   * `/prices`'s `decimals`, or an `/info` entry's own `decimals` when
+   * present). Never a fixed 2. */
+  decimals: number;
 }
 
 let cachedConfig: AnchorQuoteConfig | undefined;
 
 interface Sep38InfoAsset {
   asset?: unknown;
+  decimals?: unknown;
+}
+
+function requireFiatDecimals(value: unknown, homeDomain: string, currency: string): number {
+  // SEP-38 says an integer; accept a clean integer string too, but never a
+  // float, a negative value, or an invented default.
+  const parsed = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+  if (typeof parsed !== "number" || !Number.isInteger(parsed) || parsed < 0 || parsed > MAX_FIAT_DECIMALS) {
+    throw new AnchorQuoteUnsupportedError(
+      `${homeDomain}'s SEP-38 configuration does not report a valid decimals value for ${currency}`,
+    );
+  }
+  return parsed;
+}
+
+/** Reads the fiat asset's `decimals` from SEP-38 `/prices` -- the spec's
+ * own field for this -- when the anchor's `/info` entry does not carry it.
+ * Refuses rather than defaulting when the anchor reports no usable value. */
+async function fetchFiatDecimals(
+  fetchImpl: Sep38FetchLike,
+  quoteServer: string,
+  sellAsset: string,
+  buyAsset: string,
+  homeDomain: string,
+): Promise<number> {
+  // Sell one USDC, exactly like `fetchIndicativePrice`'s own price call, so
+  // `buy_assets` carries the fiat asset and its `decimals`.
+  const url = new URL(`${quoteServer}/prices`);
+  url.searchParams.set("sell_asset", sellAsset);
+  url.searchParams.set("sell_amount", "1");
+
+  let response: Pick<Response, "ok" | "status" | "json" | "text">;
+  try {
+    response = await fetchImpl(url.toString());
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new AnchorQuoteUnavailableError(`Could not reach ${homeDomain}'s SEP-38 prices endpoint: ${reason}`);
+  }
+  if (!response.ok) {
+    const reason = await anchorReasonFromResponse(response);
+    throw new AnchorQuoteUnavailableError(
+      `${homeDomain} refused the SEP-38 prices request (HTTP ${response.status})${reason ? `: ${reason}` : ""}`,
+    );
+  }
+  const body = await tryReadJson(response);
+  const assets =
+    typeof body === "object" && body !== null && Array.isArray((body as { buy_assets?: unknown }).buy_assets)
+      ? ((body as { buy_assets: Array<{ asset?: unknown; decimals?: unknown }> }).buy_assets ?? [])
+      : [];
+  const match = assets.find((entry) => entry.asset === buyAsset);
+  if (!match) {
+    throw new AnchorQuoteUnsupportedError(`${homeDomain}'s SEP-38 /prices did not report an asset for ${buyAsset}`);
+  }
+  const currency = buyAsset.slice("iso4217:".length);
+  return requireFiatDecimals(match.decimals, homeDomain, currency);
 }
 
 /** Resolves and caches the anchor's SEP-38 support: its quote server, the
@@ -187,8 +250,12 @@ async function resolveQuoteConfig(fetchImpl: Sep38FetchLike, forceRefresh: boole
   if (!currency) {
     throw new AnchorQuoteUnsupportedError(`${homeDomain}'s SEP-38 advertised a fiat asset with no currency code: "${buyAsset}"`);
   }
+  const decimals =
+    fiatEntry.decimals !== undefined
+      ? requireFiatDecimals(fiatEntry.decimals, homeDomain, currency)
+      : await fetchFiatDecimals(fetchImpl, endpoints.quoteServer, sellAsset, buyAsset, homeDomain);
 
-  cachedConfig = { quoteServer: endpoints.quoteServer, sellAsset, buyAsset, assetCode: usdc.code, currency };
+  cachedConfig = { quoteServer: endpoints.quoteServer, sellAsset, buyAsset, assetCode: usdc.code, currency, decimals };
   return cachedConfig;
 }
 
@@ -250,6 +317,8 @@ export interface IndicativePrice {
     /** Whatever the anchor advertises (`sep38/info`), never a hard-coded
      * TRY (NFR12). */
     currency: string;
+    /** The fiat asset's display precision, as reported by the anchor. */
+    decimals: number;
   };
   /** Epoch seconds -- this codebase's own convention
    * (`services/booking.ts`'s `holdExpiresAt`), not a Date object. */
@@ -277,14 +346,15 @@ export async function fetchIndicativePrice(
 
   const cfg = await resolveQuoteConfig(fetchImpl, options.forceRefresh ?? false);
 
-  const roundedAmount = (amountUnits / CACHE_ROUNDING_UNIT) * CACHE_ROUNDING_UNIT;
-  const cacheKey = `${cfg.sellAsset}|${cfg.buyAsset}|${roundedAmount.toString()}`;
+  const roundingUnit = cacheRoundingUnit(cfg.decimals);
+  const roundedAmount = (amountUnits / roundingUnit) * roundingUnit;
+  const cacheKey = `${cfg.sellAsset}|${cfg.buyAsset}|${cfg.decimals}|${roundedAmount.toString()}`;
   const cached = options.forceRefresh ? undefined : priceCache.get(cacheKey);
   if (cached && nowMs - cached.quotedAtMs < PRICE_CACHE_TTL_MS) {
     return {
       amount,
       asset: cfg.assetCode,
-      fiat: { amount: cached.fiatAmount, currency: cached.currency },
+      fiat: { amount: cached.fiatAmount, currency: cached.currency, decimals: cfg.decimals },
       quotedAt: Math.floor(cached.quotedAtMs / 1000),
       spreadApplied: true,
     };
@@ -323,7 +393,7 @@ export async function fetchIndicativePrice(
   return {
     amount,
     asset: cfg.assetCode,
-    fiat: { amount: fiatAmount, currency: cfg.currency },
+    fiat: { amount: fiatAmount, currency: cfg.currency, decimals: cfg.decimals },
     quotedAt: Math.floor(nowMs / 1000),
     spreadApplied: true,
   };

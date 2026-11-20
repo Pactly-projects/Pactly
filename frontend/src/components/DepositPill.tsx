@@ -1,7 +1,7 @@
-import { TryAmount } from "./TryAmount";
+import { LocalAmount } from "./LocalAmount";
 
 export interface DepositPillProps {
-  /** Integer string, USDC smallest units (AD-7) -- shown in TRY. */
+  /** Integer string, USDC smallest units (AD-7) -- shown in the anchor's local currency. */
   amount: string;
   cancellationWindowHours: number;
   /** Review follow-up: `true` only once a real hold's own `cancelDeadline`
@@ -32,7 +32,7 @@ export function DepositPill({ amount, cancellationWindowHours, freeCancellationE
     return (
       <p className="deposit-row tabular-nums">
         <b className="deposit-row__amount">
-          <TryAmount amount={amount} />
+          <LocalAmount amount={amount} />
         </b>{" "}
         deposit
         <span className="deposit-row__caption"> · {windowLabel}</span>
@@ -43,7 +43,7 @@ export function DepositPill({ amount, cancellationWindowHours, freeCancellationE
   return (
     <p className="deposit-pill tabular-nums">
       <b className="deposit-pill__amount">
-        <TryAmount amount={amount} />
+        <LocalAmount amount={amount} />
       </b>{" "}
       deposit
       <span className="deposit-pill__caption">{windowLabel}</span>

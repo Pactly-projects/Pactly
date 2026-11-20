@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { BookingActions } from "./BookingActions";
 import { Countdown } from "./Countdown";
 import { StateLabel } from "./StateLabel";
-import { TryAmount } from "./TryAmount";
+import { LocalAmount } from "./LocalAmount";
 import { stellarExplorerContractUrl, stellarExplorerTransactionUrl, trustlessWorkViewerUrl } from "../lib/stellar";
 import { formatSlotDay, formatSlotTime } from "../lib/time";
 import type { Session } from "../wallet";
@@ -56,7 +56,7 @@ export interface BookingCardProps {
 }
 
 /** The balance row's own three-state wording (Epic 3 context: "Balance
- * 1,400.00 TRY · due before the session", three states) -- exported so
+ * 1,400.00 USD · due before the session", three states) -- exported so
  * `BookingsPage.tsx`'s desktop table can render the identical wording in a
  * `<td>` instead of a card, without a second copy of this map. */
 export const BALANCE_STATE_LABEL: Record<BalanceState, string> = {
@@ -112,13 +112,13 @@ export function BookingCard({
         <div className="booking-card__amount-row">
           <dt>Deposit</dt>
           <dd className="tabular-nums">
-            <TryAmount amount={deposit.amount} />
+            <LocalAmount amount={deposit.amount} />
           </dd>
         </div>
         <div className="booking-card__amount-row">
           <dt>Balance</dt>
           <dd className="tabular-nums">
-            <TryAmount amount={balance.amount} /> · {BALANCE_STATE_LABEL[balanceState]}
+            <LocalAmount amount={balance.amount} /> · {BALANCE_STATE_LABEL[balanceState]}
           </dd>
         </div>
       </dl>

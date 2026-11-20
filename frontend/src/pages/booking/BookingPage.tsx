@@ -12,6 +12,7 @@ import {
   submitSignedTransaction,
   useBooking,
   useHoldSlot,
+  useLocalCurrencyRate,
   usePublicProviderProfile,
   verifyAnchorChallenge,
 } from "../../api/hooks";
@@ -23,7 +24,8 @@ import { LocalCurrencyPanel, localDepositErrorMessage } from "../../components/L
 import { LockButton } from "../../components/LockButton";
 import { ProviderHeader } from "../../components/ProviderHeader";
 import { Seal } from "../../components/Seal";
-import { TryAmount, useFormatTry } from "../../components/TryAmount";
+import { LocalAmount, useFormatLocalAmount } from "../../components/LocalAmount";
+import { LOCAL_CURRENCY_UNAVAILABLE } from "../../lib/money";
 import { providerPhotoSrc } from "../../lib/providerPhotos";
 import { formatSlotDay, formatSlotTime } from "../../lib/time";
 import { signInErrorMessage } from "../../components/SignInPanel";
@@ -106,7 +108,7 @@ export function BookingPage() {
   const [flowNotice, setFlowNotice] = useState<string | undefined>();
   const [flowFatalError, setFlowFatalError] = useState<string | undefined>();
   const [needsSignIn, setNeedsSignIn] = useState(false);
-  // 2026-09 pivot: the TRY bank transfer is the only way to pay the
+  // 2026-09 pivot: the local-currency bank transfer is the only way to pay the
   // deposit -- there is no payment-method choice any more, so the local
   // transfer state below is always the live path once a hold exists.
   const [localDeposit, setLocalDeposit] = useState<LocalDepositView | undefined>();
@@ -128,7 +130,8 @@ export function BookingPage() {
   const reconcileStartedAtRef = useRef<number | undefined>(undefined);
 
   const resumeAttemptedRef = useRef(false);
-  const formatTryAmount = useFormatTry();
+  const localCurrency = useLocalCurrencyRate();
+  const formatLocalAmount = useFormatLocalAmount();
 
   const isLocked = phase === "locked";
   const booking = useBooking(hold?.bookingId, session, {
@@ -639,20 +642,20 @@ export function BookingPage() {
             <div className="booking-summary__row">
               <span>Price</span>
               <strong>
-                <TryAmount amount={hold?.price.amount ?? profile.price.amount} />
+                <LocalAmount amount={hold?.price.amount ?? profile.price.amount} />
               </strong>
             </div>
             <div className="booking-summary__row">
               <span>Deposit, locked now</span>
               <strong>
-                <TryAmount amount={depositAmount} />
+                <LocalAmount amount={depositAmount} />
               </strong>
             </div>
             {balanceAmount && (
               <div className="booking-summary__row">
                 <span>Balance, due before the session</span>
                 <strong>
-                  <TryAmount amount={balanceAmount} />
+                  <LocalAmount amount={balanceAmount} />
                 </strong>
               </div>
             )}
@@ -667,7 +670,7 @@ export function BookingPage() {
             <p>
               {hold?.freeCancellationEnded
                 ? "The free-cancellation window has already passed for this appointment. A cancellation from here goes through resolution under the booking policy."
-                : `Your booking policy says cancelling before ${formatDeadline(cancelDeadline)} returns all ${formatTryAmount(depositAmount)} through resolution.`}{" "}
+                : `Your booking policy says cancelling before ${formatDeadline(cancelDeadline)} returns all ${formatLocalAmount(depositAmount)} through resolution.`}{" "}
               You (as approver) or the provider may sign the supported resolution; Pactly resolves a dispute only after one is opened on
               chain.
             </p>
@@ -717,9 +720,16 @@ export function BookingPage() {
             <div className="booking-pay">
               <p className="booking-step">Step 1 · Slot held{holdSecondsLeft !== undefined ? ` · ${formatCountdown(holdSecondsLeft)} left` : ""}</p>
               <p className="booking-step">Step 2 · Pay the deposit by bank transfer</p>
-              <p className="local-deposit__how">
-                Send the deposit in TRY to the bank details below. Trustless Work holds it in escrow — not Pactly, not the provider.
-              </p>
+              {localCurrency ? (
+                <p className="local-deposit__how">
+                  Send the deposit in {localCurrency.currency} to the bank details below. Trustless Work holds it in escrow — not
+                  Pactly, not the provider.
+                </p>
+              ) : (
+                <p className="local-deposit__how" role="alert">
+                  {LOCAL_CURRENCY_UNAVAILABLE}
+                </p>
+              )}
 
               <div className="booking-pay__action">
                 {!localDeposit && (

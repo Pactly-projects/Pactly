@@ -35,7 +35,6 @@ import type {
   ProviderApplicationOutcome,
   RateResponse,
 } from "./types";
-import { FALLBACK_TRY_PER_USDC } from "../lib/money";
 import type { Session } from "../wallet";
 
 export function useCategories() {
@@ -470,38 +469,51 @@ export function decideProviderApplication(
 }
 
 // ---------------------------------------------------------------------------
-// TRY display rate. End users never see the escrow asset: every amount is
-// shown in lira at this rate (`components/TryAmount.tsx`).
+// Local-currency display rate. End users never see the escrow asset: every
+// amount is shown in the anchor's fiat currency at this rate
+// (`components/LocalAmount.tsx`).
 // ---------------------------------------------------------------------------
 
-export interface TryRate {
-  /** TRY per 1 USDC, decimal string. */
+export interface LocalCurrencyRate {
+  /** Local currency per 1 USDC, decimal string (e.g. `"48.5410"`). */
   rate: string;
-  /** `true` while `GET /rate` has not answered (or failed) and the built-in
-   * constant is in use -- callers prefix such amounts with "≈". */
-  isFallback: boolean;
-  /** UTC epoch seconds, absent on fallback. */
-  quotedAt?: number;
+  /** The anchor's currency code (e.g. `"USD"`), never hard-coded here. */
+  currency: string;
+  /** The fiat asset's display precision, as reported by the anchor. */
+  decimals: number;
+  /** UTC epoch seconds. */
+  quotedAt: number;
 }
 
-const FALLBACK_TRY_RATE: TryRate = { rate: FALLBACK_TRY_PER_USDC, isFallback: true };
-
-/** `GET /rate`, cached for a minute, one retry. Never throws to the
- * caller: a failure (or the endpoint not existing yet) falls back to
- * `FALLBACK_TRY_PER_USDC` with `isFallback: true`, so a rate outage can
- * never blank an amount. */
-export function useTryRate(): TryRate {
+/** `GET /rate`, cached for a minute, one retry. `undefined` while it has
+ * not answered, or when the anchor's currency configuration is missing or
+ * unusable -- there is deliberately no hard-coded currency or fallback
+ * rate; callers show a plain unavailable sentence instead. */
+export function useLocalCurrencyRate(): LocalCurrencyRate | undefined {
   const query = useQuery({
-    queryKey: ["rate", "TRY"],
+    queryKey: ["rate"],
     queryFn: () => apiGet<RateResponse>("/rate"),
     staleTime: 60_000,
     retry: 1,
-    select: (data): TryRate => {
-      if (typeof data?.rate !== "string" || !/^\d+(\.\d+)?$/.test(data.rate) || Number(data.rate) <= 0) {
-        return FALLBACK_TRY_RATE;
+    select: (data): LocalCurrencyRate | undefined => {
+      if (
+        typeof data?.rate !== "string" ||
+        !/^\d+(\.\d+)?$/.test(data.rate) ||
+        Number(data.rate) <= 0 ||
+        typeof data.currency !== "string" ||
+        data.currency.trim() === "" ||
+        !Number.isInteger(data.decimals) ||
+        data.decimals < 0
+      ) {
+        return undefined;
       }
-      return { rate: data.rate, isFallback: false, quotedAt: data.quotedAt };
+      return {
+        rate: data.rate,
+        currency: data.currency,
+        decimals: data.decimals,
+        quotedAt: data.quotedAt,
+      };
     },
   });
-  return query.data ?? FALLBACK_TRY_RATE;
+  return query.data;
 }

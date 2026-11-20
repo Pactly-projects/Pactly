@@ -6,9 +6,9 @@
  * writes a currency symbol into a string").
  *
  * Product rule (2026-09 pivot): end users never see the escrow asset. Every
- * user-visible amount goes through {@link formatTry}/`<TryAmount>` and is
- * shown in Turkish lira at the backend's `GET /api/rate`; {@link formatMoney}
- * stays for internal/debug use only.
+ * user-visible amount is shown in the local currency the anchor advertises
+ * at the backend's `GET /api/rate`; its code and decimals both come from
+ * that response. There is no hard-coded currency or fallback rate.
  */
 
 /** The one copy of the balance-payment note shared by
@@ -18,17 +18,17 @@
  * it identically rather than drift into a different wording. */
 export const LOCAL_CURRENCY_UNAVAILABLE_NOTE = "Pay the balance through Pactly before the session, or settle it in person with the provider.";
 
-/** TRY per 1 USDC, used only when `GET /api/rate` is unreachable (or has
- * not answered yet). Amounts shown at this rate carry a leading "≈" -- see
- * `components/TryAmount.tsx`. */
-export const FALLBACK_TRY_PER_USDC = "48.54";
+/** Shown wherever an amount needs the anchor's currency configuration and
+ * it could not be loaded. Deliberately a plain sentence, never a guessed
+ * currency code or rate. */
+export const LOCAL_CURRENCY_UNAVAILABLE = "We couldn't load the local currency right now. Try again in a moment.";
 
 /** USDC on Stellar: 7 decimal places, matching `backend/src/services/
  * profile.ts`'s `computeDepositAmount`. */
 const SMALLEST_UNIT_DECIMALS = 7;
-/** Digits actually shown, per DESIGN.md's numeric examples
- * (`600.00 TRY`, `14.35 USDC`) -- the smallest-unit precision is kept
- * end to end in the amount string itself, only the display is rounded. */
+/** Digits actually shown for USDC in internal/debug text (`14.35 USDC`) --
+ * the smallest-unit precision is kept end to end in the amount string
+ * itself, only the display is rounded. */
 const DISPLAY_DECIMALS = 2;
 
 /** Formats an integer smallest-unit string as `"1,234.50 USDC"`. Truncates
@@ -78,19 +78,22 @@ export function smallestUnitToDecimalInput(amount: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// TRY display. The rate (`GET /api/rate`'s `rate`, TRY per 1 USDC) is a
-// decimal string such as "48.5410"; it is parsed once into an integer
-// numerator plus a power-of-ten scale so every conversion below stays in
-// BigInt -- no float ever touches the USDC side.
+// Local-currency display. The rate (`GET /api/rate`'s `rate`, local currency
+// per 1 USDC) is a decimal string such as "48.5410"; it is parsed once into
+// an integer numerator plus a power-of-ten scale so every conversion below
+// stays in BigInt -- no float ever touches the USDC side. The currency code
+// and display decimals are always parameters from the anchor's own config,
+// never constants here.
 // ---------------------------------------------------------------------------
-
-/** Kuruş per lira: TRY is shown and typed to 2 decimals. */
-const TRY_DECIMALS = 2;
 
 interface ScaledRate {
   /** `rate * 10^decimals`, as an integer. */
   numerator: bigint;
   decimals: number;
+}
+
+function isValidDecimals(decimals: number): boolean {
+  return Number.isInteger(decimals) && decimals >= 0;
 }
 
 function parseRate(rate: string): ScaledRate | undefined {
@@ -116,63 +119,84 @@ function groupThousands(digits: string): string {
 }
 
 /**
- * Converts a USDC smallest-unit integer string to TRY at `rate`, as a plain
- * decimal string with exactly two places (`"2912.46"`). Computed entirely in
- * integer kuruş, rounded half-up to the kuruş. An unparseable rate yields
- * `"0.00"` rather than throwing -- a display helper must never take a
- * screen down.
+ * Converts a USDC smallest-unit integer string to the local currency at
+ * `rate`, as a plain decimal string with exactly the anchor's `decimals`
+ * places. Computed entirely in the local currency's minor unit, rounded
+ * half-up. An unparseable rate or decimals yields `""` rather than throwing
+ * -- a display helper must never take a screen down, and the caller shows
+ * the plain unavailable sentence instead.
  */
-export function usdcToTry(amountSmallestUnit: string, rate: string): string {
+export function usdcToLocalCurrency(amountSmallestUnit: string, rate: string, decimals: number): string {
+  if (!isValidDecimals(decimals)) {
+    return "";
+  }
   const parsed = parseRate(rate);
   if (!parsed) {
-    return "0.00";
+    return "";
   }
-  const value = BigInt(amountSmallestUnit);
+  let value: bigint;
+  try {
+    value = BigInt(amountSmallestUnit);
+  } catch {
+    return "";
+  }
   const negative = value < 0n;
   const magnitude = negative ? -value : value;
-  // kuruş = amount * rate * 10^2 / 10^7, with rate = numerator / 10^decimals.
-  const kurus = divideRounded(
-    magnitude * parsed.numerator * 10n ** BigInt(TRY_DECIMALS),
+  const scale = 10n ** BigInt(decimals);
+  // minor = amount * rate * 10^decimals / 10^7, with rate = numerator / 10^decimals.
+  const minor = divideRounded(
+    magnitude * parsed.numerator * scale,
     10n ** BigInt(SMALLEST_UNIT_DECIMALS + parsed.decimals),
   );
-  const lira = kurus / 100n;
-  const fraction = (kurus % 100n).toString().padStart(TRY_DECIMALS, "0");
-  return `${negative ? "-" : ""}${lira}.${fraction}`;
+  const whole = minor / scale;
+  if (decimals === 0) {
+    return `${negative ? "-" : ""}${whole}`;
+  }
+  const fraction = (minor % scale).toString().padStart(decimals, "0");
+  return `${negative ? "-" : ""}${whole}.${fraction}`;
 }
 
-/** `"2,912.46 TRY"` -- English digit grouping, ISO code rather than a
+/** `"2,912.46 USD"` -- English digit grouping, ISO code rather than a
  * symbol (the app's copy rule). The one formatter every user-visible
- * amount goes through (via `<TryAmount>`). */
-export function formatTry(amountSmallestUnit: string, rate: string): string {
-  const decimal = usdcToTry(amountSmallestUnit, rate);
+ * amount goes through (via `LocalAmount`). Returns `""` when the anchor's
+ * configuration is unusable, so callers can show a plain error instead. */
+export function formatLocalAmount(
+  amountSmallestUnit: string,
+  rate: string,
+  currency: string,
+  decimals: number,
+): string {
+  if (!currency || !isValidDecimals(decimals)) {
+    return "";
+  }
+  const decimal = usdcToLocalCurrency(amountSmallestUnit, rate, decimals);
+  if (!decimal) {
+    return "";
+  }
   const negative = decimal.startsWith("-");
-  const [whole = "0", fraction = "00"] = (negative ? decimal.slice(1) : decimal).split(".");
-  return `${negative ? "-" : ""}${groupThousands(whole)}.${fraction} TRY`;
+  const [whole = "0", fraction = ""] = (negative ? decimal.slice(1) : decimal).split(".");
+  const fractionText = decimals > 0 ? `.${fraction}` : "";
+  return `${negative ? "-" : ""}${groupThousands(whole)}${fractionText} ${currency}`;
 }
 
 /**
- * The inverse for inputs: a TRY amount someone typed (`"2400"`,
- * `"2,400.50"`; at most two decimals, thousands commas tolerated) to the
- * USDC smallest-unit integer string the API takes, at `rate`. Rounded
+ * The inverse for inputs: a local-currency amount someone typed (`"2400"`,
+ * `"2,400.50"`; at most the anchor's `decimals` places, thousands commas
+ * tolerated, the anchor's currency code or any currency symbol stripped) to
+ * the USDC smallest-unit integer string the API takes, at `rate`. Rounded
  * half-up to the smallest unit. `undefined` for anything that is not a
- * non-negative decimal, or for an unusable rate.
- *
- * Note for callers that round-trip a stored amount: display (USDC -> TRY,
- * rounded to the kuruş) and save (TRY -> USDC) are lossy in opposite
- * directions, and the rate itself may move between the two -- an untouched
- * field should resubmit the stored USDC string, not re-convert its text.
+ * non-negative decimal, or for an unusable rate/currency configuration.
  */
-/**
- * Turns what a Turkish or English keyboard actually types into
- * `"<whole>.<fraction>"` with at most two decimals: "1200", "1200.50",
- * "1.200,50", "1,200.50", "1200,5", "₺1 200", "1200 TL" all pass. When
- * only one separator appears, it is a thousands separator if exactly
- * three digits follow it ("1.200" / "1,200") and a decimal point otherwise
- * ("1,5" / "12.50"). Returns `undefined` for anything that isn't a money
- * amount.
- */
-export function normaliseTryInput(input: string): string | undefined {
-  let text = input.replace(/[₺\s]|TRY|TL/gi, "");
+export function normaliseLocalCurrencyInput(input: string, currency: string, decimals: number): string | undefined {
+  if (!isValidDecimals(decimals)) {
+    return undefined;
+  }
+  let text = input;
+  if (currency) {
+    const escapedCurrency = currency.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text.replace(new RegExp(escapedCurrency, "gi"), "");
+  }
+  text = text.replace(/[\p{Sc}\s]/gu, "");
   if (!/^\d[\d.,]*$/.test(text)) {
     return undefined;
   }
@@ -185,7 +209,10 @@ export function normaliseTryInput(input: string): string | undefined {
     const separator = lastDot !== -1 ? "." : ",";
     const digitsAfter = text.length - Math.max(lastDot, lastComma) - 1;
     const occurrences = text.split(separator).length - 1;
-    decimalSeparator = occurrences === 1 && digitsAfter !== 3 ? separator : undefined;
+    // A lone separator with at most `decimals` digits after it is a decimal
+    // point; three digits after it is grouping unless the currency itself
+    // has three decimal places.
+    decimalSeparator = occurrences === 1 && digitsAfter <= decimals ? separator : undefined;
   }
   let whole = text;
   let fraction = "";
@@ -195,28 +222,39 @@ export function normaliseTryInput(input: string): string | undefined {
     fraction = text.slice(at + 1);
   }
   whole = whole.replace(/[.,]/g, "");
-  if (!/^\d+$/.test(whole) || !/^\d{0,2}$/.test(fraction)) {
+  if (!/^\d+$/.test(whole) || !new RegExp(`^\\d{0,${decimals}}$`).test(fraction)) {
     return undefined;
   }
   text = fraction ? `${whole}.${fraction}` : whole;
   return text;
 }
 
-export function tryToUsdcSmallestUnit(tryInput: string, rate: string): string | undefined {
+export function localCurrencyToUsdcSmallestUnit(
+  input: string,
+  rate: string,
+  currency: string,
+  decimals: number,
+): string | undefined {
+  if (!isValidDecimals(decimals)) {
+    return undefined;
+  }
   const parsed = parseRate(rate);
   if (!parsed) {
     return undefined;
   }
-  const normalised = normaliseTryInput(tryInput);
+  const normalised = normaliseLocalCurrencyInput(input, currency, decimals);
   if (normalised === undefined) {
     return undefined;
   }
   const [whole = "0", fraction = ""] = normalised.split(".");
-  const kurus = BigInt(`${whole}${fraction.padEnd(TRY_DECIMALS, "0")}`);
-  // smallest = kuruş * 10^7 * 10^decimals / (10^2 * numerator)
+  if (fraction.length > decimals) {
+    return undefined;
+  }
+  const minor = BigInt(`${whole}${fraction.padEnd(decimals, "0")}`);
+  // smallest = minor * 10^7 * 10^rateDecimals / (10^decimals * numerator)
   const smallest = divideRounded(
-    kurus * 10n ** BigInt(SMALLEST_UNIT_DECIMALS + parsed.decimals),
-    10n ** BigInt(TRY_DECIMALS) * parsed.numerator,
+    minor * 10n ** BigInt(SMALLEST_UNIT_DECIMALS + parsed.decimals),
+    10n ** BigInt(decimals) * parsed.numerator,
   );
   return smallest.toString();
 }

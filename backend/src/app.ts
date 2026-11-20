@@ -46,7 +46,7 @@ import { AccountFundingError, InvalidXdrError, NoCustodialAccountError } from ".
 import { ensureAccountReady, ensureAccountReadyInBackground, type EnsureAccountReadyDeps } from "./custodial/funding.js";
 import { signXdrForWallet } from "./custodial/keys.js";
 import { getUserByWalletAddress } from "./db/users.js";
-import { RateUnavailableError, getTryRate } from "./services/rate.js";
+import { RateUnavailableError, getLocalCurrencyRate } from "./services/rate.js";
 import type { Db } from "./db/client.js";
 import {
   InvalidAvailabilitySlotsError,
@@ -360,9 +360,10 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
 
   // ---------------------------------------------------------------------
   // Passkey pivot: sign-up/sign-in with a passkey, the embedded custodial
-  // account behind it, and the TRY rate the frontend prices everything in.
-  // The JWT these issue is the same Pactly JWT `/auth/verify` issues, with
-  // the custodial account's public key as `sub` -- every route below this
+  // account behind it, and the local-currency rate the frontend prices
+  // everything in (currency code and decimals both from the anchor). The
+  // JWT these issue is the same Pactly JWT `/auth/verify` issues, with the
+  // custodial account's public key as `sub` -- every route below this
   // block is unchanged.
   // ---------------------------------------------------------------------
 
@@ -504,12 +505,13 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     }
   });
 
-  /** TRY per 1 USDC, from the anchor's own SEP-38 price. Public, cached a
-   * minute, and served stale rather than failing when the anchor is down
-   * -- only a cold cache plus a down anchor is a `503`. */
+  /** Local currency per 1 USDC, from the anchor's own SEP-38 price, including
+   * the anchor's currency code and decimals. Public, cached a minute, and
+   * served stale rather than failing when the anchor is down -- only a cold
+   * cache plus a down anchor is a `503` (never a hard-coded fallback). */
   app.get("/rate", async (c) => {
     try {
-      const rate = await getTryRate({ fetchImpl: rateFetchImpl });
+      const rate = await getLocalCurrencyRate({ fetchImpl: rateFetchImpl });
       return c.json(rate);
     } catch (error) {
       if (error instanceof RateUnavailableError) {

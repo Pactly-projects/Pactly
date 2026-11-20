@@ -1,6 +1,8 @@
 import { Link } from "react-router";
 import { ArrowRightIcon, CalendarBlankIcon, CheckCircleIcon, LockKeyIcon, ShieldCheckIcon, StorefrontIcon } from "@phosphor-icons/react";
 
+import { useLocalCurrencyRate } from "../../api/hooks";
+import { LocalAmount } from "../../components/LocalAmount";
 import { providerPhotoSrc } from "../../lib/providerPhotos";
 
 /** The four seeded categories (`backend/src/seed/demoData.ts`), named here
@@ -23,6 +25,7 @@ const CATEGORIES: Array<{ slug: string; name: string; providerId: string }> = [
 export function LandingPage() {
   const storyPhoto = providerPhotoSrc("demo-marmara-hair-clinic");
   const heroPhoto = providerPhotoSrc("demo-atelier-lale");
+  const localCurrency = useLocalCurrencyRate();
 
   return (
     <div className="landing">
@@ -69,7 +72,9 @@ export function LandingPage() {
               <p className="landing__mock-name">Marmara Hair Clinic</p>
               <p className="landing__mock-meta">Consultation · Istanbul · Fri 14:00</p>
               <div className="deposit-pill">
-                <span className="deposit-pill__amount tabular-nums">2,400.00 TRY</span>{" "}
+                <span className="deposit-pill__amount tabular-nums">
+                  <LocalAmount amount="500000000" />
+                </span>{" "}
                 <span className="deposit-pill__caption">deposit · free cancellation until Thu 14:00</span>
               </div>
               <div className="landing__mock-status">
@@ -106,8 +111,8 @@ export function LandingPage() {
               </div>
               <h3>Lock a deposit in escrow</h3>
               <p>
-                Pay the deposit by bank transfer in TRY. Trustless Work holds it in escrow — not Pactly, not the
-                provider.
+                Pay the deposit by bank transfer{localCurrency ? ` in ${localCurrency.currency}` : ""}. Trustless Work
+                holds it in escrow — not Pactly, not the provider.
               </p>
             </div>
             <div className="landing__step">
@@ -216,7 +221,9 @@ export function LandingPage() {
                 Trustless Work escrow
               </a>
             </span>
-            <span className="landing__badge">Bank transfer · TRY sandbox</span>
+            <span className="landing__badge">
+              Bank transfer{localCurrency ? ` · ${localCurrency.currency} sandbox` : " · sandbox"}
+            </span>
           </div>
         </div>
       </section>

@@ -5,7 +5,7 @@ import { ScalesIcon } from "@phosphor-icons/react";
 import { ApiError } from "../../api/client";
 import { resolveDispute, submitSignedTransaction, useAdminDisputes } from "../../api/hooks";
 import { PageMasthead } from "../../components/PageMasthead";
-import { TryAmount } from "../../components/TryAmount";
+import { LocalAmount } from "../../components/LocalAmount";
 import { shortenStellarId } from "../../lib/stellar";
 import { formatSlotDay, formatSlotTime } from "../../lib/time";
 import { SignInPanel } from "../../components/SignInPanel";
@@ -105,7 +105,7 @@ function DisputeRow({
         <div className="booking-card__amount-row">
           <dt>Deposit</dt>
           <dd className="tabular-nums">
-            <TryAmount amount={dispute.amount.amount} />
+            <LocalAmount amount={dispute.amount.amount} />
           </dd>
         </div>
         <div className="booking-card__amount-row">

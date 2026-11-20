@@ -13,7 +13,7 @@ import {
 } from "../api/hooks";
 import { LOCAL_CURRENCY_UNAVAILABLE_NOTE } from "../lib/money";
 import { signXdr, type Session } from "../wallet";
-import { useFormatTry } from "./TryAmount";
+import { useFormatLocalAmount } from "./LocalAmount";
 import type { ActionResponse, BalanceState, BookingLifecycle, DisputeReason, Money, PendingActionKind } from "../api/types";
 
 export interface BookingActionsProps {
@@ -147,7 +147,7 @@ export function BookingActions({
    * of this booking confirms it is still `unpaid`, so the client can never
    * fire a second real payment while the first one's outcome is unknown. */
   const [verifyingBalance, setVerifyingBalance] = useState(false);
-  const formatTryAmount = useFormatTry();
+  const formatLocalAmount = useFormatLocalAmount();
 
   function describeFailure(error: unknown): string {
     if (error instanceof ApiError) {
@@ -443,7 +443,7 @@ export function BookingActions({
                 ? "Confirm with your passkey…"
                 : busyAction === "confirming-balance"
                   ? "Confirming…"
-                  : `Pay balance (${formatTryAmount(balance.amount)})`}
+                  : `Pay balance (${formatLocalAmount(balance.amount)})`}
             </button>
           </div>
         </div>
@@ -459,7 +459,7 @@ export function BookingActions({
 
       {confirmingCash && (
         <div className="booking-card__dispute-panel">
-          <p>Confirm this client already paid the {formatTryAmount(balance.amount)} balance in person.</p>
+          <p>Confirm this client already paid the {formatLocalAmount(balance.amount)} balance in person.</p>
           <div className="booking-card__actions">
             <button type="button" className="button-primary" disabled={isBusy} onClick={() => void handleMarkCash()}>
               {busyAction === "mark-cash" ? "Saving…" : "Confirm, paid in person"}
@@ -489,7 +489,7 @@ export function BookingActions({
 
       {disputeStep.kind === "confirming" && (
         <div className="booking-card__dispute-panel">
-          <p>{policyStatement(disputeStep.suggestedOutcome, formatTryAmount(deposit.amount), viewer)}</p>
+          <p>{policyStatement(disputeStep.suggestedOutcome, formatLocalAmount(deposit.amount), viewer)}</p>
           <p>This needs resolution. Pactly will resolve it as the named dispute resolver -- nothing moves until then.</p>
           <div className="booking-card__actions">
             <button type="button" className="button-primary" disabled={isBusy} onClick={() => void confirmDispute()}>
