@@ -30,7 +30,7 @@ import {
   replaceFutureSlots,
   type AvailabilitySlotRow,
 } from "../db/availabilitySlots.js";
-import { getCategoryById, getCategoryBySlug, listCategories, type CategoryRow } from "../db/categories.js";
+import { getCategoryById, getCategoryBySlug, listCategories, listVisibleCategories, type CategoryRow } from "../db/categories.js";
 import type { Db } from "../db/client.js";
 
 /** Pactly's only supported asset for now (matches `services/booking.ts`'s
@@ -581,12 +581,13 @@ export interface CategoryWithProviderCount {
   providerCount: number;
 }
 
-/** `GET /categories`: every category plus `providerCount` (Story 3.2's own
- * extension of Story 4.1's plain list). A category with no approved
- * provider still appears, with `providerCount: 0` -- the Discover rail
- * shows every category, not just the populated ones. */
+/** `GET /categories`: every visible category plus `providerCount` (Story 3.2's
+ * own extension of Story 4.1's plain list, Story 5.8 adds visibility filter).
+ * A category with no approved provider still appears, with `providerCount: 0`
+ * -- the Discover rail shows every visible category, not just the populated ones.
+ * Hidden categories are excluded (AC2). */
 export async function listCategoriesWithProviderCounts(db: Db): Promise<CategoryWithProviderCount[]> {
-  const [allCategories, counts] = await Promise.all([listCategories(db), countApprovedProvidersByCategory(db)]);
+  const [allCategories, counts] = await Promise.all([listVisibleCategories(db), countApprovedProvidersByCategory(db)]);
   return allCategories.map((category) => ({
     id: category.id,
     name: category.name,

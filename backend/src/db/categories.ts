@@ -22,3 +22,23 @@ export async function getCategoryBySlug(db: Db, slug: string): Promise<CategoryR
 export async function listCategories(db: Db): Promise<CategoryRow[]> {
   return db.select().from(categories);
 }
+
+/** Story 5.8: returns only visible categories. */
+export async function listVisibleCategories(db: Db): Promise<CategoryRow[]> {
+  return db.select().from(categories).where(eq(categories.visible, true));
+}
+
+/** Story 5.8: creates a new category with the given name and slug. */
+export async function insertCategory(db: Db, values: { id: string; name: string; slug: string }): Promise<void> {
+  await db.insert(categories).values({
+    id: values.id,
+    name: values.name,
+    slug: values.slug,
+    visible: true,
+  });
+}
+
+/** Story 5.8: toggles a category's visibility. */
+export async function updateCategoryVisibility(db: Db, id: string, visible: boolean): Promise<void> {
+  await db.update(categories).set({ visible }).where(eq(categories.id, id));
+}

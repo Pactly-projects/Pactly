@@ -17,12 +17,18 @@
 import { sqliteTable, text, integer, primaryKey, unique } from "drizzle-orm/sqlite-core";
 
 /** Initial set: therapy and wellbeing, education and lessons, consulting,
- * fitness and beauty (PRD Data Model Additions). */
+ * fitness and beauty (PRD Data Model Additions). Story 5.8: admin can hide
+ * a category from discovery and new applications while keeping existing
+ * shops readable. */
 export const categories = sqliteTable("categories", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   parentCategoryId: text("parent_category_id"),
+  /** Story 5.8: false when hidden by admin. Defaults to true for seeded
+   * categories. Hidden categories don't appear in discovery or the apply
+   * form. */
+  visible: integer("visible", { mode: "boolean" }).notNull().default(true),
 });
 
 export const PROVIDER_APPLICATION_STATES = ["pending", "approved", "rejected"] as const;

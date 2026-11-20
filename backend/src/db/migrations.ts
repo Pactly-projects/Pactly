@@ -16,7 +16,8 @@ const STATEMENTS: readonly string[] = [
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
-    parent_category_id TEXT
+    parent_category_id TEXT,
+    visible INTEGER NOT NULL DEFAULT 1
   )`,
   `CREATE TABLE IF NOT EXISTS provider_applications (
     id TEXT PRIMARY KEY,
@@ -326,5 +327,10 @@ export function runMigrations(sqlite: Database): void {
   }
   if (!hasColumn(sqlite, "bookings", "anchor_trustline_tx_hash")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN anchor_trustline_tx_hash TEXT`);
+  }
+
+  // Story 5.8: admin can hide categories from discovery and new applications.
+  if (!hasColumn(sqlite, "categories", "visible")) {
+    sqlite.exec(`ALTER TABLE categories ADD COLUMN visible INTEGER NOT NULL DEFAULT 1`);
   }
 }

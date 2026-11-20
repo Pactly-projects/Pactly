@@ -34,7 +34,8 @@ writeFileSync(
     "PACTLY_HOME_DOMAIN=pactly.test",
     "PACTLY_AUTH_SIGNING_SECRET=test-signing-secret-not-for-production-use",
     "ESCROW_CONTRACT_ID=",
-    "PACTLY_ADMIN_WALLETS=",
+    // Story 5.8: add a test admin wallet for category management tests
+    "PACTLY_ADMIN_WALLETS=GADMIN1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
     "TRUSTLESS_WORK_API_URL=",
     "TRUSTLESS_WORK_API_KEY=",
     "TRUSTLESS_WORK_PLATFORM_ID=",

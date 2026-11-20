@@ -210,6 +210,9 @@ export async function applyAsProvider(db: Db, walletAddress: string, input: Prov
     const category = await getCategoryById(db, input.categoryId);
     if (!category) {
       details.categoryId = "Pick a category.";
+    } else if (!category.visible) {
+      // Story 5.8: hidden categories cannot be selected on new applications
+      details.categoryId = "This category is not available.";
     }
   }
   if (Object.keys(details).length > 0) {

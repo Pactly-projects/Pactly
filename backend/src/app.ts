@@ -46,6 +46,7 @@ import { AccountFundingError, InvalidXdrError, NoCustodialAccountError } from ".
 import { ensureAccountReady, ensureAccountReadyInBackground, type EnsureAccountReadyDeps } from "./custodial/funding.js";
 import { signXdrForWallet } from "./custodial/keys.js";
 import { getUserByWalletAddress } from "./db/users.js";
+import { getCategoryById, getCategoryBySlug, insertCategory, updateCategoryVisibility } from "./db/categories.js";
 import { RateUnavailableError, getTryRate } from "./services/rate.js";
 import type { Db } from "./db/client.js";
 import {
@@ -1440,6 +1441,55 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       }
       throw error;
     }
+  });
+
+  // ---------------------------------------------------------------------
+  // Story 5.8: admin category management. Any admin wallet may create a
+  // category or hide/show an existing one.
+  // ---------------------------------------------------------------------
+
+  app.post("/admin/categories", requirePactlyAuth, requireAdmin, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    const name = typeof body?.name === "string" ? body.name.trim() : "";
+    const slug = typeof body?.slug === "string" ? body.slug.trim() : "";
+    
+    if (!name || !slug) {
+      return c.json({ code: "invalid_request", message: "name and slug are required." }, 400);
+    }
+    
+    // Check if slug already exists
+    const existing = await getCategoryBySlug(db, slug);
+    if (existing) {
+      return c.json({ code: "DUPLICATE_SLUG", message: "A category with this slug already exists." }, 409);
+    }
+    
+    const { randomUUID } = await import("node:crypto");
+    const id = randomUUID();
+    await insertCategory(db, { id, name, slug });
+    // Return the category we just created
+    return c.json({ category: { id, name, slug, visible: true, parentCategoryId: null } }, 201);
+  });
+
+  app.patch("/admin/categories/:id/visibility", requirePactlyAuth, requireAdmin, async (c) => {
+    const id = c.req.param("id");
+    if (!id) {
+      return c.json({ code: "invalid_request", message: "category id is required." }, 400);
+    }
+    
+    const body = await c.req.json().catch(() => undefined);
+    const visible = body?.visible;
+    if (typeof visible !== "boolean") {
+      return c.json({ code: "invalid_request", message: "visible must be a boolean." }, 400);
+    }
+    
+    const category = await getCategoryById(db, id);
+    if (!category) {
+      return c.json({ code: "CATEGORY_NOT_FOUND", message: "No category was found with that id." }, 404);
+    }
+    
+    await updateCategoryVisibility(db, id, visible);
+    const updated = await getCategoryById(db, id);
+    return c.json({ category: updated });
   });
 
   return app;
