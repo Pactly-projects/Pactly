@@ -48,6 +48,8 @@ const STATEMENTS: readonly string[] = [
     deposit_rate_bps INTEGER NOT NULL,
     cancellation_window_hours INTEGER NOT NULL,
     is_approved INTEGER NOT NULL DEFAULT 0,
+    suspended_at INTEGER,
+    suspension_reason TEXT,
     verified_session_count INTEGER NOT NULL DEFAULT 0,
     provider_cancellation_count INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
@@ -212,6 +214,15 @@ export function runMigrations(sqlite: Database): void {
   }
   if (!hasColumn(sqlite, "provider_profiles", "location")) {
     sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN location TEXT NOT NULL DEFAULT ''`);
+  }
+  // Admin suspension: nullable, so every pre-existing profile is simply
+  // not suspended. Kept (rather than a boolean) because the panel shows
+  // the reason and the timestamp records when the last suspension began.
+  if (!hasColumn(sqlite, "provider_profiles", "suspended_at")) {
+    sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN suspended_at INTEGER`);
+  }
+  if (!hasColumn(sqlite, "provider_profiles", "suspension_reason")) {
+    sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN suspension_reason TEXT`);
   }
   // Story 3.4: the AD-13 slot hold's own columns -- nullable, since a
   // database created before this story has `bookings` rows that never had a

@@ -34,6 +34,10 @@ export interface ProviderProfile {
   cancellationWindowHours: number;
   verifiedSessionCount: number;
   isApproved: boolean;
+  /** A suspended shop is absent from discovery/search and cannot take a
+   * new hold; its own panel still reads this view to show the reason. */
+  isSuspended: boolean;
+  suspensionReason: string | null;
   /** UTC epoch seconds, ascending. */
   slots: number[];
 }

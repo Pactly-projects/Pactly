@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, or, sql } from "drizzle-orm";
+import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 
 import type { Db } from "./client.js";
 import { categories, providerProfiles } from "./schema.js";
@@ -60,16 +60,18 @@ export async function getProviderProfileByWallet(db: Db, walletAddress: string):
   return rows[0];
 }
 
-/** Approved profiles only -- an unapproved profile must appear in neither
- * marketplace listings nor search (PRD Story 4.1 AC4). */
+/** Approved, non-suspended profiles only -- an unapproved profile must
+ * appear in neither marketplace listings nor search (PRD Story 4.1 AC4),
+ * and a suspended one disappears from both until an admin unsuspends it. */
 export async function listApprovedProviderProfiles(db: Db, categoryId?: string): Promise<ProviderProfileRow[]> {
+  const conditions = [eq(providerProfiles.isApproved, true), isNull(providerProfiles.suspendedAt)];
   if (categoryId) {
-    return db
-      .select()
-      .from(providerProfiles)
-      .where(and(eq(providerProfiles.isApproved, true), eq(providerProfiles.categoryId, categoryId)));
+    conditions.push(eq(providerProfiles.categoryId, categoryId));
   }
-  return db.select().from(providerProfiles).where(eq(providerProfiles.isApproved, true));
+  return db
+    .select()
+    .from(providerProfiles)
+    .where(and(...conditions));
 }
 
 /** Story 3.2's `GET /categories` extension: `providerCount` per category,
@@ -80,7 +82,7 @@ export async function countApprovedProvidersByCategory(db: Db): Promise<Map<stri
   const rows = await db
     .select({ categoryId: providerProfiles.categoryId, providerCount: count() })
     .from(providerProfiles)
-    .where(eq(providerProfiles.isApproved, true))
+    .where(and(eq(providerProfiles.isApproved, true), isNull(providerProfiles.suspendedAt)))
     .groupBy(providerProfiles.categoryId);
   return new Map(rows.map((row) => [row.categoryId, row.providerCount]));
 }
@@ -127,7 +129,7 @@ export async function listApprovedProviderProfilesForDiscover(
   db: Db,
   filters: DiscoverProfileFilters = {},
 ): Promise<ProviderProfileRow[]> {
-  const conditions = [eq(providerProfiles.isApproved, true)];
+  const conditions = [eq(providerProfiles.isApproved, true), isNull(providerProfiles.suspendedAt)];
   if (filters.categoryId) {
     conditions.push(eq(providerProfiles.categoryId, filters.categoryId));
   }
@@ -166,6 +168,8 @@ export async function listApprovedProviderProfilesForDiscover(
       depositRateBps: providerProfiles.depositRateBps,
       cancellationWindowHours: providerProfiles.cancellationWindowHours,
       isApproved: providerProfiles.isApproved,
+      suspendedAt: providerProfiles.suspendedAt,
+      suspensionReason: providerProfiles.suspensionReason,
       verifiedSessionCount: providerProfiles.verifiedSessionCount,
       providerCancellationCount: providerProfiles.providerCancellationCount,
       createdAt: providerProfiles.createdAt,
@@ -224,6 +228,35 @@ export async function updateProviderProfileFromApplication(
  * marketplace. */
 export async function setProviderProfileApproved(db: Db, id: string, isApproved: boolean): Promise<void> {
   const result = await db.update(providerProfiles).set({ isApproved }).where(eq(providerProfiles.id, id));
+  if (result.changes === 0) {
+    throw new TypeError(`No provider profile exists with id "${id}"`);
+  }
+}
+
+export interface ProviderProfileSuspension {
+  /** UTC epoch milliseconds, like every `createdAt` in the schema. */
+  suspendedAt: number;
+  reason: string;
+}
+
+/** Admin suspension's one write. Passing `null` clears both columns
+ * (unsuspend); passing a suspension writes the latest reason over whatever
+ * was there before, so suspending twice keeps only the newest reason.
+ * `isApproved` is deliberately untouched -- a suspended shop stays
+ * approved internally and comes back to discovery on unsuspend without a
+ * second admin approval. */
+export async function setProviderProfileSuspension(
+  db: Db,
+  id: string,
+  suspension: ProviderProfileSuspension | null,
+): Promise<void> {
+  const result = await db
+    .update(providerProfiles)
+    .set({
+      suspendedAt: suspension?.suspendedAt ?? null,
+      suspensionReason: suspension?.reason ?? null,
+    })
+    .where(eq(providerProfiles.id, id));
   if (result.changes === 0) {
     throw new TypeError(`No provider profile exists with id "${id}"`);
   }

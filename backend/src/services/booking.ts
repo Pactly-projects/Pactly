@@ -296,8 +296,9 @@ function dayRange(startsAt: number, tzOffsetMinutes = 0): { start: number; end: 
  * and atomically claims the slot via {@link insertBookingHoldIfSlotFree}.
  *
  * Refuses {@link SlotUnavailableError} (`404`/`409` per the route -- an
- * unknown/unapproved provider is `404 PROVIDER_NOT_FOUND`, everything else
- * about the slot itself is `409 SLOT_UNAVAILABLE`) for an unknown provider,
+ * unknown/unapproved/suspended provider is `404 PROVIDER_NOT_FOUND`,
+ * everything else about the slot itself is `409 SLOT_UNAVAILABLE`) for an
+ * unknown provider,
  * an unapproved provider, a slot that does not exist for this provider, or
  * a slot in the past. Refuses {@link SlotTakenError} (`409 SLOT_TAKEN`)
  * when another active booking already holds this exact slot -- the one
@@ -311,7 +312,11 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
   const resolveUsdc = deps.resolveUsdcAsset ?? resolveUsdcAsset;
 
   const profile = await getProviderProfileById(db, input.providerProfileId);
-  if (!profile || !profile.isApproved) {
+  // A suspended shop is refused exactly like an unapproved one: it cannot
+  // take a new hold (and so cannot receive a new lock), and the client
+  // learns nothing about why it disappeared. Existing bookings never call
+  // this path, so they keep working.
+  if (!profile || !profile.isApproved || profile.suspendedAt !== null) {
     throw new ProviderNotFoundError();
   }
   const slot = await getSlotByProviderAndStart(db, profile.id, input.slotStartsAt);
@@ -583,6 +588,16 @@ export async function lockDeposit(
       );
     }
     return { deployed: false, contractId: booking.escrowContractId, unsignedXdr: booking.escrowDeployXdr, txHash: booking.escrowDeployTxHash };
+  }
+
+  // A shop an admin suspended after this hold was placed must not start a
+  // new lock. A deploy already built and stored before the suspension is
+  // still handed back by the retry path above -- its fund/submit may be in
+  // flight, and cutting that off would strand a transaction the client has
+  // already signed -- but no *new* deploy is ever built below.
+  const providerProfile = await getProviderProfileById(db, booking.providerProfileId);
+  if (providerProfile && providerProfile.suspendedAt !== null) {
+    throw new BookingEscrowStateError(`Provider for booking "${bookingId}" is suspended; no new lock can be created.`);
   }
 
   const providerAddress = await requireProviderAddress(db, booking);

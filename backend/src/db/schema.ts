@@ -80,6 +80,18 @@ export const providerProfiles = sqliteTable("provider_profiles", {
   depositRateBps: integer("deposit_rate_bps").notNull(),
   cancellationWindowHours: integer("cancellation_window_hours").notNull(),
   isApproved: integer("is_approved", { mode: "boolean" }).notNull().default(false),
+  /**
+   * Admin suspension. A suspended shop stays `isApproved` -- it was
+   * approved once -- but every marketplace read excludes it
+   * (`db/providerProfiles.ts`), `getPublicProviderProfile` treats it as
+   * not found, and `holdSlot` refuses it, so it cannot take new bookings.
+   * `suspensionReason` is the latest reason an admin gave: suspending
+   * twice overwrites both fields rather than appending a second reason.
+   * Clearing both (`unsuspend`) puts the shop back into discovery with no
+   * re-approval. Existing bookings are never touched.
+   */
+  suspendedAt: integer("suspended_at"),
+  suspensionReason: text("suspension_reason"),
   /** Increases only on the chain's `released` event (FR20); never written
    * by hand outside the event worker's own bookkeeping. */
   verifiedSessionCount: integer("verified_session_count").notNull().default(0),

@@ -278,6 +278,20 @@ export function AvailabilityPage() {
         }
       />
 
+      {profile.isSuspended && (
+        <div className="banner banner--alert" role="status" style={{ marginBottom: "var(--space-6)" }}>
+          <p>
+            <strong>Your shop is suspended.</strong> It is hidden from discovery and search and cannot take new
+            bookings until Pactly lifts the suspension. Existing bookings are unaffected.
+          </p>
+          {profile.suspensionReason && (
+            <p>
+              <strong>Reason:</strong> {profile.suspensionReason}
+            </p>
+          )}
+        </div>
+      )}
+
       {!profile.isApproved && (
         <div className="banner" role="status" style={{ marginBottom: "var(--space-6)" }}>
           Your profile is pending approval. You can still set your rules and availability now -- clients will see them

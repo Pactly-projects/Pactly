@@ -20,6 +20,7 @@ import {
   insertProviderProfile,
   listApprovedProviderProfiles,
   listApprovedProviderProfilesForDiscover,
+  setProviderProfileSuspension,
   updateProviderProfileRules,
   type ProviderProfileRow,
 } from "../db/providerProfiles.js";
@@ -148,6 +149,25 @@ export class InvalidAvailabilitySlotsError extends Error {
   }
 }
 
+/** A pending (or rejected) application's profile cannot be suspended --
+ * only an approved, listed shop can. The application is rejected instead
+ * (`services/providerApplications.ts`). */
+export class ProviderNotApprovedError extends Error {
+  constructor(message = "Only an approved shop can be suspended or unsuspended.") {
+    super(message);
+    this.name = "ProviderNotApprovedError";
+  }
+}
+
+export class InvalidSuspensionReasonError extends Error {
+  readonly details: Record<string, string>;
+  constructor(details: Record<string, string>) {
+    super("A suspension reason is required.");
+    this.name = "InvalidSuspensionReasonError";
+    this.details = details;
+  }
+}
+
 export interface ProviderRulesInput {
   priceAmount: string;
   depositRateBps: number;
@@ -261,6 +281,13 @@ export interface ProviderProfileView {
   cancellationWindowHours: number;
   verifiedSessionCount: number;
   isApproved: boolean;
+  /** A suspended shop is never returned publicly (`getPublicProviderProfile`
+   * refuses it), but its own panel still reads the profile -- that is what
+   * shows the reason below. */
+  isSuspended: boolean;
+  /** The latest admin-stated reason, or `null` when the shop is not
+   * suspended. */
+  suspensionReason: string | null;
   /** UTC epoch seconds, ascending. */
   slots: number[];
 }
@@ -287,6 +314,8 @@ export function buildProviderProfileView(
     cancellationWindowHours: profile.cancellationWindowHours,
     verifiedSessionCount: profile.verifiedSessionCount,
     isApproved: profile.isApproved,
+    isSuspended: profile.suspendedAt !== null,
+    suspensionReason: profile.suspensionReason,
     slots: slots.map((slot) => slot.startsAt),
   };
 }
@@ -312,14 +341,21 @@ async function loadCategoryOrThrow(db: Db, categoryId: string, notFound: () => E
  * `listOpenFutureSlots`, not `listFutureSlots` -- so a client is never shown
  * a slot they cannot actually hold; this is also how "the slot then shows
  * as taken on the profile" (spec Acceptance Criteria) is satisfied once a
- * lock lands. */
+ * lock lands.
+ *
+ * Admin suspension hides the public profile the same way an unapproved one
+ * is hidden -- the identical {@link ProviderNotFoundError}, so a suspended
+ * shop is discoverable by neither browsing nor a guessed URL. Its own
+ * panel (`getOwnProviderProfile`) still resolves, and every existing
+ * booking keeps loading, because a booking carries its own provider
+ * summary rather than re-reading this view. */
 export async function getPublicProviderProfile(
   db: Db,
   id: string,
   now: number = Math.floor(Date.now() / 1000),
 ): Promise<ProviderProfileView> {
   const profile = await getProviderProfileById(db, id);
-  if (!profile || !profile.isApproved) {
+  if (!profile || !profile.isApproved || profile.suspendedAt !== null) {
     throw new ProviderNotFoundError();
   }
   const category = await loadCategoryOrThrow(db, profile.categoryId, () => new ProviderNotFoundError());
@@ -383,6 +419,55 @@ export async function updateProviderAvailability(
   }
   await replaceFutureSlots(db, profile.id, slots, now);
   return getOwnProviderProfile(db, walletAddress, now);
+}
+
+// ---------------------------------------------------------------------------
+// Admin suspension: an approved shop can be taken out of discovery with a
+// reason and put back again. `isApproved` is never changed here -- a
+// suspended shop is still approved internally, so unsuspending restores
+// the listing without a second approval step.
+// ---------------------------------------------------------------------------
+
+const MAX_SUSPENSION_REASON = 400;
+
+async function loadProfileOrThrow(db: Db, id: string): Promise<ProviderProfileRow> {
+  const profile = await getProviderProfileById(db, id);
+  if (!profile) {
+    throw new ProviderNotFoundError();
+  }
+  if (!profile.isApproved) {
+    throw new ProviderNotApprovedError();
+  }
+  return profile;
+}
+
+/** `POST /admin/providers/:id/suspend`: records the reason and removes the
+ * shop from every marketplace read and from `holdSlot`. Suspending an
+ * already-suspended shop is allowed and keeps only the newest reason. */
+export async function suspendProviderProfile(
+  db: Db,
+  id: string,
+  reason: string,
+  now: number = Date.now(),
+): Promise<ProviderProfileView> {
+  const profile = await loadProfileOrThrow(db, id);
+  const cleanReason = typeof reason === "string" ? reason.trim() : "";
+  if (cleanReason.length === 0 || cleanReason.length > MAX_SUSPENSION_REASON) {
+    throw new InvalidSuspensionReasonError({
+      reason: `Give a reason between 1 and ${MAX_SUSPENSION_REASON} characters.`,
+    });
+  }
+  await setProviderProfileSuspension(db, profile.id, { suspendedAt: now, reason: cleanReason });
+  return getOwnProviderProfile(db, profile.walletAddress);
+}
+
+/** `POST /admin/providers/:id/unsuspend`: clears the suspension (and its
+ * reason), putting the shop back into discovery unchanged. Idempotent --
+ * unsuspending a shop that is not suspended is a no-op. */
+export async function unsuspendProviderProfile(db: Db, id: string): Promise<ProviderProfileView> {
+  const profile = await loadProfileOrThrow(db, id);
+  await setProviderProfileSuspension(db, profile.id, null);
+  return getOwnProviderProfile(db, profile.walletAddress);
 }
 
 // ---------------------------------------------------------------------------

@@ -51,13 +51,17 @@ import type { Db } from "./db/client.js";
 import {
   InvalidAvailabilitySlotsError,
   InvalidProviderRulesError,
+  InvalidSuspensionReasonError,
   NotAProviderError,
+  ProviderNotApprovedError,
   ProviderNotFoundError,
   getOwnProviderProfile,
   getPublicProviderProfile,
   listCategoriesWithProviderCounts,
   listDiscoverProviders,
   suggestDiscoverQueries,
+  suspendProviderProfile,
+  unsuspendProviderProfile,
   updateProviderAvailability,
   updateProviderRules,
   type DiscoverFilters,
@@ -1325,6 +1329,56 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       }
       if (error instanceof InvalidProviderApplicationError) {
         return c.json({ code: "INVALID_APPLICATION", message: error.message, details: error.details }, 400);
+      }
+      throw error;
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Admin suspension: an approved shop can be taken out of discovery with
+  // a reason and put back again. A pending application cannot be suspended
+  // (it is rejected instead); existing bookings are never touched. There is
+  // no audit log in this codebase, so nothing beyond the profile row itself
+  // is written here.
+  // ---------------------------------------------------------------------
+
+  app.post("/admin/providers/:id/suspend", requirePactlyAuth, requireAdmin, async (c) => {
+    const id = c.req.param("id");
+    if (!id) {
+      return c.json({ code: "invalid_request", message: "provider id is required." }, 400);
+    }
+    const body = await c.req.json().catch(() => undefined);
+    try {
+      const profile = await suspendProviderProfile(db, id, typeof body?.reason === "string" ? body.reason : "");
+      return c.json({ profile });
+    } catch (error) {
+      if (error instanceof ProviderNotFoundError) {
+        return c.json({ code: "PROVIDER_NOT_FOUND", message: error.message }, 404);
+      }
+      if (error instanceof ProviderNotApprovedError) {
+        return c.json({ code: "PROVIDER_NOT_APPROVED", message: error.message }, 409);
+      }
+      if (error instanceof InvalidSuspensionReasonError) {
+        return c.json({ code: "INVALID_SUSPENSION_REASON", message: error.message, details: error.details }, 400);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/admin/providers/:id/unsuspend", requirePactlyAuth, requireAdmin, async (c) => {
+    const id = c.req.param("id");
+    if (!id) {
+      return c.json({ code: "invalid_request", message: "provider id is required." }, 400);
+    }
+    try {
+      const profile = await unsuspendProviderProfile(db, id);
+      return c.json({ profile });
+    } catch (error) {
+      if (error instanceof ProviderNotFoundError) {
+        return c.json({ code: "PROVIDER_NOT_FOUND", message: error.message }, 404);
+      }
+      if (error instanceof ProviderNotApprovedError) {
+        return c.json({ code: "PROVIDER_NOT_APPROVED", message: error.message }, 409);
       }
       throw error;
     }
