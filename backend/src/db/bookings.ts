@@ -673,3 +673,15 @@ export async function extendHoldExpiresAt(db: Db, bookingId: string, holdExpires
 export async function setAnchorTrustlineTxHash(db: Db, bookingId: string, txHash: string): Promise<void> {
   await db.update(bookings).set({ anchorTrustlineTxHash: txHash }).where(eq(bookings.id, bookingId));
 }
+
+/** Issue #35: marks client reminder as shown at the given timestamp. Once set,
+ * never cleared, so a booking only shows its client reminder once. */
+export async function markClientReminderShown(db: Db, bookingId: string, shownAt: number): Promise<void> {
+  await db.update(bookings).set({ clientReminderShownAt: shownAt }).where(eq(bookings.id, bookingId));
+}
+
+/** Issue #35: marks provider reminder as shown at the given timestamp. Once set,
+ * never cleared, so a booking only shows its provider reminder once. */
+export async function markProviderReminderShown(db: Db, bookingId: string, shownAt: number): Promise<void> {
+  await db.update(bookings).set({ providerReminderShownAt: shownAt }).where(eq(bookings.id, bookingId));
+}

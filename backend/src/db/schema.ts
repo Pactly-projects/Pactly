@@ -333,6 +333,15 @@ export const bookings = sqliteTable("bookings", {
    * balance payment does. */
   anchorTrustlineTxHash: text("anchor_trustline_tx_hash"),
 
+  /** Issue #35: UTC epoch seconds when client reminder was shown. Set once,
+   * never cleared. When null and appointment is within 24h, reminder is
+   * shown to client. */
+  clientReminderShownAt: integer("client_reminder_shown_at"),
+  /** Issue #35: UTC epoch seconds when provider reminder was shown. Set once,
+   * never cleared. When null and appointment is within 24h, reminder is
+   * shown to provider. */
+  providerReminderShownAt: integer("provider_reminder_shown_at"),
+
   createdAt: integer("created_at").notNull(),
 });
 
