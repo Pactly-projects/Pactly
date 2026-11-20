@@ -274,3 +274,53 @@ test("requirePactlyAuth accepts a lowercase 'bearer' scheme (RFC 7235 is case-in
   const body = (await response.json()) as { walletAddress: string };
   assert.equal(body.walletAddress, wallet.publicKey());
 });
+
+test("API responses include security headers and never send wildcard CORS", async () => {
+  const result = openTestDatabase();
+  try {
+    const app = createApp(result.db);
+    const response = await app.request("/health");
+    assert.equal(response.status, 200);
+    
+    // AC1: Three security headers are always present
+    assert.equal(response.headers.get("X-Content-Type-Options"), "nosniff");
+    assert.equal(response.headers.get("Referrer-Policy"), "no-referrer");
+    assert.equal(response.headers.get("X-Frame-Options"), "DENY");
+    
+    // AC3: CORS origin is never wildcard
+    const corsOrigin = response.headers.get("Access-Control-Allow-Origin");
+    assert.notEqual(corsOrigin, "*", "CORS origin must not be wildcard");
+    // Either a specific origin or null/undefined, but never "*"
+    if (corsOrigin) {
+      assert.ok(corsOrigin.includes("://"), "CORS origin must be a specific URL if present");
+    }
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("Security headers are present on all routes including auth endpoints", async () => {
+  const result = openTestDatabase();
+  try {
+    const app = createApp(result.db);
+    const wallet = Keypair.random();
+    
+    // Test on auth challenge endpoint
+    const challengeResponse = await app.request("/auth/challenge", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ publicKey: wallet.publicKey() }),
+    });
+    assert.equal(challengeResponse.headers.get("X-Content-Type-Options"), "nosniff");
+    assert.equal(challengeResponse.headers.get("Referrer-Policy"), "no-referrer");
+    assert.equal(challengeResponse.headers.get("X-Frame-Options"), "DENY");
+    
+    // Test on categories endpoint
+    const categoriesResponse = await app.request("/categories");
+    assert.equal(categoriesResponse.headers.get("X-Content-Type-Options"), "nosniff");
+    assert.equal(categoriesResponse.headers.get("Referrer-Policy"), "no-referrer");
+    assert.equal(categoriesResponse.headers.get("X-Frame-Options"), "DENY");
+  } finally {
+    closeDatabase(result);
+  }
+});

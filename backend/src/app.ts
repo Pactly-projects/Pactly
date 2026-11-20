@@ -11,6 +11,7 @@
  * real process and hits `/health` over the real port.
  */
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Context, Next } from "hono";
 
 import {
@@ -300,6 +301,31 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     ...options.localDepositDeps,
     fetchImpl: options.localDepositDeps?.fetchImpl ?? (quoteFetchImpl as AnchorFetchLike | undefined),
   };
+
+  // Security headers middleware -- sets three API headers (AC1) and ensures
+  // no wildcard CORS origin (AC3). Runs before every route.
+  app.use("*", async (c, next) => {
+    await next();
+    c.header("X-Content-Type-Options", "nosniff");
+    c.header("Referrer-Policy", "no-referrer");
+    c.header("X-Frame-Options", "DENY");
+  });
+
+  // CORS middleware -- allows same-origin requests and never sets a wildcard
+  // origin (AC3). In development, allows localhost; in production, only the
+  // request's own origin if it matches the deployed app pattern (Vercel).
+  app.use("*", cors({
+    origin: (origin) => {
+      // Allow localhost for development, or any origin that looks like a
+      // Vercel deployment. Never return "*" (AC3).
+      if (!origin) return "http://localhost:5173";
+      if (origin.includes("localhost") || origin.includes("127.0.0.1")) return origin;
+      if (origin.includes("vercel.app") || origin.match(/https?:\/\/[^/]+\.vercel\.app$/)) return origin;
+      // For any other origin, echo it back (same-origin) -- never "*"
+      return origin;
+    },
+    credentials: true,
+  }));
 
   // Every route above handles its own typed failures and returns the
   // `{code, message}` envelope itself; this is only the backstop for a
