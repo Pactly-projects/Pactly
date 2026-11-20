@@ -64,6 +64,12 @@ export class FakeAuthenticator {
     return b64url(this.credentialId);
   }
 
+  /** The COSE-encoded public key a real registration stores -- what
+   * `verifyAuthenticationResponse` needs for this credential. */
+  get cosePublicKeyBase64Url(): string {
+    return b64url(coseEc2PublicKey(this.publicKey));
+  }
+
   /** What the browser would return from `startRegistration(options)`. */
   createRegistrationResponse(challenge: string) {
     const flags = 0x01 | 0x04 | 0x40; // UP | UV | AT

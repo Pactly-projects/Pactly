@@ -12,7 +12,7 @@ import {
   submitSignedTransaction,
 } from "../api/hooks";
 import { LOCAL_CURRENCY_UNAVAILABLE_NOTE } from "../lib/money";
-import { signXdr, type Session } from "../wallet";
+import { assertMoneyAction, signXdr, type Session } from "../wallet";
 import { useFormatTry } from "./TryAmount";
 import type { ActionResponse, BalanceState, BookingLifecycle, DisputeReason, Money, PendingActionKind } from "../api/types";
 
@@ -174,12 +174,31 @@ export function BookingActions({
     return "Connection dropped. Nothing changed.";
   }
 
-  async function runAction(kind: ActionKind, build: () => Promise<ActionResponse>, successNotice: string): Promise<void> {
+  /** `freshPasskey` marks the money-moving actions (issue #13: release,
+   * dispute, resolve -- and lock/fund from the booking page): the passkey is
+   * asked again before the action is even built, even while the session is
+   * valid. A cancelled prompt never reaches `build`, so the booking is
+   * unchanged. */
+  async function runAction(
+    kind: ActionKind,
+    build: (assertionToken?: string) => Promise<ActionResponse>,
+    successNotice: string,
+    freshPasskey = false,
+  ): Promise<void> {
     if (!session || busyAction) return;
     setBusyAction(kind);
     setNotice(undefined);
     try {
-      const built = await build();
+      let assertionToken: string | undefined;
+      if (freshPasskey) {
+        try {
+          assertionToken = await assertMoneyAction(session);
+        } catch {
+          setNotice({ text: "You didn't sign. Nothing changed -- try again whenever you're ready." });
+          return;
+        }
+      }
+      const built = await build(assertionToken);
       let signedXdr: string;
       try {
         signedXdr = await signXdr(built.unsignedXdr, session.walletAddress);
@@ -233,7 +252,14 @@ export function BookingActions({
     setBusyAction("dispute");
     setNotice(undefined);
     try {
-      const result = await openDispute(id, reason, session);
+      let assertionToken: string;
+      try {
+        assertionToken = await assertMoneyAction(session);
+      } catch {
+        setNotice({ text: "You didn't sign. Nothing changed -- try again whenever you're ready." });
+        return;
+      }
+      const result = await openDispute(id, reason, session, assertionToken);
       setDisputeStep({ kind: "confirming", reason, suggestedOutcome: result.suggestedOutcome, unsignedXdr: result.unsignedXdr });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -409,7 +435,14 @@ export function BookingActions({
               type="button"
               className="button-primary"
               disabled={isBusy}
-              onClick={() => void runAction("release", () => releaseDeposit(id, session!), "Released. Waiting for it to confirm.")}
+              onClick={() =>
+                void runAction(
+                  "release",
+                  (assertionToken) => releaseDeposit(id, session!, assertionToken!),
+                  "Released. Waiting for it to confirm.",
+                  true,
+                )
+              }
             >
               {busyAction === "release" ? "Confirm with your passkey…" : "Release deposit"}
             </button>

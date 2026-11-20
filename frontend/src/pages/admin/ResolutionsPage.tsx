@@ -9,7 +9,7 @@ import { TryAmount } from "../../components/TryAmount";
 import { shortenStellarId } from "../../lib/stellar";
 import { formatSlotDay, formatSlotTime } from "../../lib/time";
 import { SignInPanel } from "../../components/SignInPanel";
-import { getSession, signOut, signXdr, type Session } from "../../wallet";
+import { assertMoneyAction, getSession, signOut, signXdr, type Session } from "../../wallet";
 import type { AdminDisputeListItem, DisputeOutcome } from "../../api/types";
 
 const REASON_LABEL: Record<AdminDisputeListItem["reason"], string> = {
@@ -56,10 +56,20 @@ function DisputeRow({
     setBusy(outcome);
     setError(undefined);
     try {
+      // Issue #13: resolving moves the deposit, so it asks the passkey for a
+      // fresh assertion before the XDR is even built. A cancelled prompt
+      // leaves the dispute untouched.
+      let assertionToken: string;
+      try {
+        assertionToken = await assertMoneyAction(session);
+      } catch {
+        setError("You didn't sign. Nothing changed -- try again whenever you're ready.");
+        return;
+      }
       // Building the resolve XDR is itself harmless (nothing moves until it
       // is signed) -- this page still only ever calls it on an explicit tap
       // of one of the two outcome buttons below, never automatically.
-      const built = await resolveDispute(dispute.bookingId, outcome, session);
+      const built = await resolveDispute(dispute.bookingId, outcome, session, assertionToken);
       let signedXdr: string;
       try {
         signedXdr = await signXdr(built.unsignedXdr, session.walletAddress);

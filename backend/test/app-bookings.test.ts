@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import { StrKey } from "@stellar/stellar-sdk";
 
 import { createApp } from "../src/app.js";
+import { issueMoneyAssertionToken } from "../src/auth/assertion.js";
 import { issuePactlyJwt } from "../src/auth/challenge.js";
 import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
 import { getBookingById } from "../src/db/bookings.js";
@@ -27,9 +28,14 @@ import { closeDatabase, openTestDatabase, seedProviderProfile } from "./helpers.
 
 const FAKE_USDC_DEPS = { resolveUsdcAsset: async () => ({ contractId: "CUSDCFAKE00000000000000000000000000000000000000000" }) };
 
+/** Session token plus the fresh passkey assertion every money action's
+ * build route requires (issue #13) -- the route-level gate is exercised on
+ * its own in `app-money-assertion.test.ts`; the rest of this file is about
+ * what happens *after* the gate. */
 async function authHeader(walletAddress: string): Promise<Record<string, string>> {
   const token = await issuePactlyJwt(walletAddress);
-  return { authorization: `Bearer ${token}` };
+  const assertionToken = await issueMoneyAssertionToken(walletAddress);
+  return { authorization: `Bearer ${token}`, "x-pactly-assertion": assertionToken };
 }
 
 /** A minimal, valid stellar.toml body with a USDC currency entry -- used to

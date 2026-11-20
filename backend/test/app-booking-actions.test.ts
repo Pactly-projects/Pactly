@@ -14,6 +14,7 @@ import { Account, Keypair, Networks, Operation, StrKey, TransactionBuilder } fro
 import { randomBytes } from "node:crypto";
 
 import { createApp } from "../src/app.js";
+import { issueMoneyAssertionToken } from "../src/auth/assertion.js";
 import { issuePactlyJwt } from "../src/auth/challenge.js";
 import { getBookingById, updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
 import { insertEscrowProcessedEventIfNew } from "../src/db/escrowProcessedEvents.js";
@@ -39,9 +40,14 @@ function buildFakeTransactionXdr(): { xdr: string; hash: string } {
   return { xdr: tx.toXDR(), hash: Buffer.from(tx.hash()).toString("hex") };
 }
 
+/** Session token plus a fresh passkey assertion for the money-action build
+ * routes (issue #13). The gate itself -- missing/stale/other-wallet -- is
+ * `app-money-assertion.test.ts`'s own job; complete/approve simply ignore
+ * the extra header. */
 async function authHeader(walletAddress: string): Promise<Record<string, string>> {
   const token = await issuePactlyJwt(walletAddress);
-  return { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const assertionToken = await issueMoneyAssertionToken(walletAddress);
+  return { authorization: `Bearer ${token}`, "x-pactly-assertion": assertionToken, "content-type": "application/json" };
 }
 
 /** An `EscrowAdapter` every method of which throws unless overridden --

@@ -87,6 +87,33 @@ export async function updatePasskeyCounter(db: Db, id: string, counter: number):
   await db.update(passkeyCredentials).set({ counter }).where(eq(passkeyCredentials.id, id));
 }
 
+/** Every credential a user has registered -- the step-up assertion's own
+ * `allowCredentials` list, and the check that a wallet has any passkey at
+ * all before a money action can ask for one. */
+export async function listPasskeyCredentialsByUserId(db: Db, userId: string): Promise<PasskeyCredentialRow[]> {
+  return db.select().from(passkeyCredentials).where(eq(passkeyCredentials.userId, userId));
+}
+
+/** Records (or refreshes) a passkey-kit credential against the user who
+ * owns the smart wallet. The key is the credential id, so reconnecting the
+ * same passkey overwrites rather than duplicating; the public key is
+ * COSE-encoded, the shape `verifyAuthenticationResponse` expects. */
+export async function upsertPasskeyCredential(db: Db, credential: InsertPasskeyCredentialInput): Promise<void> {
+  await db
+    .insert(passkeyCredentials)
+    .values({ ...credential, transports: JSON.stringify(credential.transports) })
+    .onConflictDoUpdate({
+      target: passkeyCredentials.id,
+      set: {
+        userId: credential.userId,
+        publicKey: credential.publicKey,
+        // Never resets the counter: a reconnect must not erase the replay
+        // protection an earlier assertion's own counter advance bought.
+        transports: JSON.stringify(credential.transports),
+      },
+    });
+}
+
 export interface InsertWebauthnChallengeInput {
   id: string;
   kind: WebauthnChallengeKind;

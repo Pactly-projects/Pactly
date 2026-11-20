@@ -30,6 +30,12 @@ function authHeaders(token?: string): HeadersInit | undefined {
   return token ? { authorization: `Bearer ${token}` } : undefined;
 }
 
+/** Issue #13: the short-lived passkey assertion a money-action route
+ * requires alongside the normal session token. */
+function assertionHeaders(assertionToken?: string): HeadersInit | undefined {
+  return assertionToken ? { "x-pactly-assertion": assertionToken } : undefined;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
@@ -57,12 +63,22 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
+export interface ApiRequestOptions {
+  /** A fresh passkey-confirmation token (`/auth/assertion/verify`) for a
+   * money action build route. */
+  assertionToken?: string;
+}
+
 export function apiGet<T>(path: string, token?: string): Promise<T> {
   return request<T>(path, { headers: authHeaders(token) });
 }
 
-export function apiPost<T>(path: string, body: unknown, token?: string): Promise<T> {
-  return request<T>(path, { method: "POST", headers: authHeaders(token), body: JSON.stringify(body) });
+export function apiPost<T>(path: string, body: unknown, token?: string, options: ApiRequestOptions = {}): Promise<T> {
+  return request<T>(path, {
+    method: "POST",
+    headers: { ...authHeaders(token), ...assertionHeaders(options.assertionToken) },
+    body: JSON.stringify(body),
+  });
 }
 
 export function apiPut<T>(path: string, body: unknown, token?: string): Promise<T> {

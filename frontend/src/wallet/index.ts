@@ -10,6 +10,7 @@
  */
 import { PasskeyKit, MercuryIndexer, SignerKey } from "passkey-kit";
 import { IndexedDBStorage } from "passkey-kit/storage";
+import { startAuthentication, type PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 import { Transaction } from "@stellar/stellar-sdk";
 
 import { ApiError, apiPost } from "../api/client";
@@ -155,8 +156,27 @@ interface KitSubmitResponse {
   hash: string;
 }
 
-async function issueSession(contractId: string): Promise<Session> {
-  const verified = await apiPost<KitSessionResponse>("/auth/passkey-kit/session", { contractId });
+/** The passkey behind the smart wallet, in the shape the backend records at
+ * session time so a money action can later ask for a fresh assertion. */
+interface WalletCredential {
+  id: string;
+  /** 65-byte uncompressed P-256 point (`0x04 || x || y`). */
+  publicKey: Uint8Array;
+}
+
+function toBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function issueSession(contractId: string, credential?: WalletCredential): Promise<Session> {
+  const verified = await apiPost<KitSessionResponse>("/auth/passkey-kit/session", {
+    contractId,
+    credential: credential ? { id: credential.id, publicKey: toBase64Url(credential.publicKey) } : undefined,
+  });
   return {
     token: verified.token,
     walletAddress: verified.walletAddress,
@@ -172,7 +192,13 @@ async function connectExisting(): Promise<Session> {
       ? (keyId) => indexer.findWallets(SignerKey.Secp256r1(keyId))
       : undefined,
   });
-  return issueSession(connected.contractId);
+  const stored =
+    (await storage.get(connected.keyIdBase64)) ??
+    (await storage.getByContract(connected.contractId)).find((entry) => entry.keyId === connected.keyIdBase64);
+  return issueSession(
+    connected.contractId,
+    stored ? { id: stored.keyId, publicKey: stored.publicKey } : undefined,
+  );
 }
 
 async function createAndDeploy(): Promise<Session> {
@@ -181,7 +207,7 @@ async function createAndDeploy(): Promise<Session> {
   const submitted = await apiPost<KitSubmitResponse>("/auth/passkey-kit/submit", { xdr: created.signedTx });
   await kit.confirmWalletCreation(created, submitted.hash);
   await kit.connectWallet({ keyId: created.keyIdBase64 });
-  return issueSession(created.contractId);
+  return issueSession(created.contractId, { id: created.keyIdBase64, publicKey: created.publicKey });
 }
 
 /**
@@ -283,4 +309,51 @@ export async function signXdr(unsignedXdr: string, walletAddress: string): Promi
     session.token,
   );
   return signedXdr;
+}
+
+interface MoneyAssertionOptionsResponse {
+  assertionId: string;
+  options: PublicKeyCredentialRequestOptionsJSON;
+}
+
+async function requestMoneyAssertion(session: Session): Promise<string> {
+  const { assertionId, options } = await apiPost<MoneyAssertionOptionsResponse>(
+    "/auth/assertion/options",
+    {},
+    session.token,
+  );
+  const response = await startAuthentication({ optionsJSON: options });
+  const { assertionToken } = await apiPost<{ assertionToken: string }>(
+    "/auth/assertion/verify",
+    { assertionId, response },
+    session.token,
+  );
+  return assertionToken;
+}
+
+/**
+ * Issue #13: a fresh passkey assertion before a money action, even while the
+ * session is still valid. Returns the short-lived token the build route
+ * requires; the browser prompt is what makes a morning session not enough
+ * to move a deposit in the evening. A cancelled prompt throws
+ * {@link SignInCancelledError} before any request is built, so the booking
+ * is unchanged. A session issued before the credential was recorded (or one
+ * whose credential row is gone) reconnects once to register it, then asks
+ * again.
+ */
+export async function assertMoneyAction(session: Session): Promise<string> {
+  try {
+    return await requestMoneyAssertion(session);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "PASSKEY_NOT_REGISTERED") {
+      try {
+        const refreshed = await connectExisting();
+        saveSession(refreshed);
+        return await requestMoneyAssertion(refreshed);
+      } catch (retryError) {
+        throw isCancelled(retryError) ? new SignInCancelledError() : retryError;
+      }
+    }
+    throw isCancelled(error) ? new SignInCancelledError() : error;
+  }
 }

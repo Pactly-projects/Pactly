@@ -13,6 +13,7 @@
  * funded) wraps the envelope. Neither secret belongs in the browser bundle.
  */
 import { createHash, randomUUID } from "node:crypto";
+import { isoCBOR } from "@simplewebauthn/server/helpers";
 import {
   BASE_FEE,
   FeeBumpTransaction,
@@ -28,7 +29,7 @@ import { PasskeyServer } from "passkey-kit/server";
 import { config } from "../config.js";
 import { encryptSecret, passkeyKitRailKeypair } from "../custodial/keys.js";
 import type { Db } from "../db/client.js";
-import { getUserByWalletAddress, insertUser, updateUserWalletAndSecret } from "../db/users.js";
+import { getUserByWalletAddress, insertUser, updateUserWalletAndSecret, upsertPasskeyCredential } from "../db/users.js";
 import { issuePactlyJwt } from "./challenge.js";
 
 /** Stored on `users.encrypted_secret` so `/me/sign` knows there is no seed. */
@@ -241,12 +242,64 @@ export interface PasskeyKitSession {
   contractId: string;
 }
 
+/** What the browser's Passkey Kit record holds about the credential behind
+ * a smart wallet: the base64url credential id and the 65-byte uncompressed
+ * P-256 public key. Sending it at session time is what lets a later money
+ * action verify a fresh WebAuthn assertion server-side (issue #13). */
+export interface PasskeyKitCredentialInput {
+  id: string;
+  /** base64url of the SEC-1 uncompressed point (`0x04 || x || y`). */
+  publicKey: string;
+  transports?: string[];
+}
+
+/**
+ * WebAuthn's stored credential key is a COSE_Key, not a raw SEC-1 point --
+ * `verifyAuthenticationResponse` decodes the former. Rebuilds an EC2/P-256
+ * COSE map (kty 2, alg ES256, crv P-256) from the kit's 65-byte key, or
+ * `undefined` when the input is not exactly one uncompressed point.
+ */
+function sec1PublicKeyToCose(publicKey: Buffer): Buffer | undefined {
+  if (publicKey.length !== 65 || publicKey[0] !== 0x04) {
+    return undefined;
+  }
+  const map = new Map<number, unknown>([
+    [1, 2],
+    [3, -7],
+    [-1, 1],
+    [-2, new Uint8Array(publicKey.subarray(1, 33))],
+    [-3, new Uint8Array(publicKey.subarray(33, 65))],
+  ]);
+  return Buffer.from(isoCBOR.encode(map as never));
+}
+
+/** Records the passkey behind a smart wallet so a money action can ask it
+ * for a fresh assertion later. Best effort stays deterministic: a malformed
+ * key is a `400`, never a silently unstep-up-able account. */
+async function recordPasskeyCredential(db: Db, userId: string, input: PasskeyKitCredentialInput): Promise<void> {
+  const cose = sec1PublicKeyToCose(Buffer.from(input.publicKey, "base64url"));
+  if (!input.id || !cose) {
+    throw new PasskeyKitAccountError("The passkey credential could not be recorded.");
+  }
+  await upsertPasskeyCredential(db, {
+    id: input.id,
+    userId,
+    publicKey: cose.toString("base64url"),
+    // The kit does not expose a signature counter at connect time; a real
+    // authenticator's first assertion only has to advance past this.
+    counter: 0,
+    transports: input.transports ?? [],
+    createdAt: Date.now(),
+  });
+}
+
 /** Issues a Pactly JWT for the `G…` rail behind a Passkey Kit `C…` wallet,
  * creating (or migrating) the users row on first sight. The Face ID step
  * still deploys the smart wallet; deposits and lock use the rail key. */
 export async function sessionForPasskeyKitWallet(
   db: Db,
   contractId: string,
+  credential?: PasskeyKitCredentialInput,
 ): Promise<PasskeyKitSession> {
   if (!StrKey.isValidContract(contractId)) {
     throw new PasskeyKitAccountError();
@@ -288,6 +341,9 @@ export async function sessionForPasskeyKitWallet(
   }
   if (!user) {
     throw new PasskeyKitAccountError();
+  }
+  if (credential) {
+    await recordPasskeyCredential(db, user.id, credential);
   }
   return { token: await issuePactlyJwt(railAddress), walletAddress: railAddress, contractId };
 }

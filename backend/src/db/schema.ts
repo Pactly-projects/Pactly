@@ -560,7 +560,7 @@ export const passkeyCredentials = sqliteTable("passkey_credentials", {
   createdAt: integer("created_at").notNull(),
 });
 
-export const WEBAUTHN_CHALLENGE_KINDS = ["register", "login"] as const;
+export const WEBAUTHN_CHALLENGE_KINDS = ["register", "login", "assert"] as const;
 export type WebauthnChallengeKind = (typeof WEBAUTHN_CHALLENGE_KINDS)[number];
 
 /** A pending passkey ceremony's challenge: issued by the `/options` step,

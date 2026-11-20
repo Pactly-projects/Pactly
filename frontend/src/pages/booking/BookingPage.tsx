@@ -27,7 +27,15 @@ import { TryAmount, useFormatTry } from "../../components/TryAmount";
 import { providerPhotoSrc } from "../../lib/providerPhotos";
 import { formatSlotDay, formatSlotTime } from "../../lib/time";
 import { signInErrorMessage } from "../../components/SignInPanel";
-import { getSession, signIn, signOut, signXdr, type Session } from "../../wallet";
+import {
+  SignInCancelledError,
+  assertMoneyAction,
+  getSession,
+  signIn,
+  signOut,
+  signXdr,
+  type Session,
+} from "../../wallet";
 
 /** A human-readable display phase -- distinct from the ref-based "engine"
  * state below (review follow-up: the engine state -- which contractId is
@@ -354,7 +362,23 @@ export function BookingPage() {
     try {
       if (!engineRef.current.deploySubmittedAtMs) {
         setPhase("building-deploy");
-        const lockResult = await lockDeposit(hold.bookingId, session, options.rebuild ?? false);
+        // Issue #13: lock moves the deposit, so it asks for a fresh passkey
+        // assertion even while this session is valid. A cancelled prompt
+        // returns here -- no XDR is built, the booking is untouched.
+        let assertionToken: string;
+        try {
+          assertionToken = await assertMoneyAction(session);
+        } catch (error) {
+          if (error instanceof SignInCancelledError) {
+            setPhase("idle");
+            setFlowNotice(
+              `You didn't sign. Nothing changed -- the slot is still yours for ${formatCountdown(holdSecondsLeft)}.`,
+            );
+            return;
+          }
+          throw error;
+        }
+        const lockResult = await lockDeposit(hold.bookingId, session, options.rebuild ?? false, assertionToken);
         if (lockResult.deployed) {
           engineRef.current.contractId = lockResult.contractId;
           // A deploy was already confirmed submitted in an earlier session
@@ -407,7 +431,27 @@ export function BookingPage() {
   async function runFundStep(): Promise<void> {
     if (!hold || !session || !engineRef.current.deploySubmittedAtMs) return;
     setPhase("building-fund");
-    const fundResult = await fundDepositWithRetry(hold.bookingId, session, engineRef.current.deploySubmittedAtMs);
+    // Funding moves the deposit too -- a fresh assertion, never the
+    // morning's session alone.
+    let assertionToken: string;
+    try {
+      assertionToken = await assertMoneyAction(session);
+    } catch (error) {
+      if (error instanceof SignInCancelledError) {
+        setPhase("deployed");
+        setFlowNotice(
+          `You didn't sign. Nothing changed -- the slot is still yours for ${formatCountdown(holdSecondsLeft)}.`,
+        );
+        return;
+      }
+      throw error;
+    }
+    const fundResult = await fundDepositWithRetry(
+      hold.bookingId,
+      session,
+      engineRef.current.deploySubmittedAtMs,
+      assertionToken,
+    );
     setPendingSignature({ xdr: fundResult.unsignedXdr, kind: "fund" });
     setPhase("awaiting-fund-signature");
     let signedFundXdr: string;
