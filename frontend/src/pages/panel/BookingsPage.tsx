@@ -148,7 +148,11 @@ export function BookingsPage() {
                       <StateLabel lifecycle={booking.lifecycle} viewer="provider" />
                     </td>
                     <td>
-                      <Countdown cancelDeadline={booking.cancelDeadline} depositLocked={booking.escrowState === "locked"} />
+                      <Countdown
+                        cancelDeadline={booking.cancelDeadline}
+                        serverTime={booking.serverTime}
+                        depositLocked={booking.escrowState === "locked"}
+                      />
                     </td>
                     <td>
                       {booking.contractId && (
@@ -174,6 +178,8 @@ export function BookingsPage() {
                         balance={booking.balance}
                         balanceState={booking.balanceState}
                         slotStartsAt={booking.slotStartsAt}
+                        cancelDeadline={booking.cancelDeadline}
+                        serverTime={booking.serverTime}
                         session={session}
                         onActionSubmitted={() => bookingsQuery.refetch()}
                         onUnauthorized={handleSignOut}
@@ -201,6 +207,7 @@ export function BookingsPage() {
                 pendingAction={booking.pendingAction}
                 balanceState={booking.balanceState}
                 cancelDeadline={booking.cancelDeadline}
+                serverTime={booking.serverTime}
                 contractId={booking.contractId}
                 balancePaymentTxHash={booking.balancePaymentTxHash}
                 session={session}
@@ -231,6 +238,7 @@ export function BookingsPage() {
                 pendingAction={booking.pendingAction}
                 balanceState={booking.balanceState}
                 cancelDeadline={booking.cancelDeadline}
+                serverTime={booking.serverTime}
                 contractId={booking.contractId}
                 balancePaymentTxHash={booking.balancePaymentTxHash}
                 session={session}

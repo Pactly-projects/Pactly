@@ -259,6 +259,10 @@ export interface HoldSlotResult {
   balance: Money;
   price: Money;
   cancelDeadline: number;
+  /** UTC epoch seconds -- the server clock at response time. The client
+   * drives its free-cancellation countdown from this plus
+   * `cancelDeadline`, never from the browser clock alone. */
+  serverTime: number;
   provider: BookingProviderSummary;
   /** `true` only when `cancelDeadline` has already passed at hold time --
    * the deposit is still locked as normal, but there is no free
@@ -334,6 +338,7 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
       balance: { amount: existing.balanceAmount, asset: ASSET },
       price: { amount: (BigInt(existing.depositAmount) + BigInt(existing.balanceAmount)).toString(), asset: ASSET },
       cancelDeadline: existing.cancelDeadline,
+      serverTime: now,
       provider,
       ...(existing.cancelDeadline <= now ? { freeCancellationEnded: true as const } : {}),
     };
@@ -383,6 +388,7 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
     balance: { amount: balanceAmount, asset: ASSET },
     price: { amount: profile.priceAmount, asset: ASSET },
     cancelDeadline,
+    serverTime: now,
     provider,
     ...(cancelDeadline <= now ? { freeCancellationEnded: true as const } : {}),
   };
@@ -1421,6 +1427,10 @@ export interface BookingView {
   price: Money;
   slotStartsAt: number | null;
   cancelDeadline: number;
+  /** UTC epoch seconds -- the server clock at response time. Resynced on
+   * every refetch so the client's free-cancellation countdown stays
+   * aligned with the clock that will actually accept or refuse a cancel. */
+  serverTime: number;
   provider: BookingProviderSummary;
   /** Story 3.7: the on-chain transaction hash once the balance was paid
    * through Pactly (`null` otherwise -- unpaid, or paid in cash, which has
@@ -1436,7 +1446,12 @@ export interface BookingView {
  * chain-derived lifecycle, and a small provider summary. The UI is told
  * `locked` only from here (`escrowState`), never from a submit response
  * (spec's own "Always" rule). */
-export async function getBookingView(db: Db, bookingId: string, walletAddress: string): Promise<BookingView> {
+export async function getBookingView(
+  db: Db,
+  bookingId: string,
+  walletAddress: string,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<BookingView> {
   const booking = await getBookingForClient(db, bookingId, walletAddress);
   const profile = await getProviderProfileById(db, booking.providerProfileId);
   const lifecycle = (await getEscrowLifecycle(db, bookingId)) ?? {};
@@ -1454,6 +1469,7 @@ export async function getBookingView(db: Db, bookingId: string, walletAddress: s
     price: { amount: (BigInt(booking.depositAmount) + BigInt(booking.balanceAmount)).toString(), asset: ASSET },
     slotStartsAt,
     cancelDeadline: booking.cancelDeadline,
+    serverTime: now,
     provider: profile
       ? { id: profile.id, displayName: profile.displayName, title: profile.title }
       : { id: booking.providerProfileId, displayName: "", title: "" },
@@ -1700,6 +1716,8 @@ export interface BookingListItemBase {
    * through Pactly (`null` for unpaid or paid-in-cash). */
   balancePaymentTxHash: string | null;
   cancelDeadline: number;
+  /** UTC epoch seconds -- the server clock at response time. */
+  serverTime: number;
   contractId: string | null;
   holdExpiresAt: number | null;
   /** The AD-13 hold's own 10-minute window has passed with `escrowState`
@@ -1759,6 +1777,7 @@ function toBookingListItemBase(
     balanceState: booking.balanceState,
     balancePaymentTxHash: booking.balancePaymentTxHash,
     cancelDeadline: booking.cancelDeadline,
+    serverTime: now,
     contractId: booking.escrowContractId,
     holdExpiresAt: booking.holdExpiresAt,
     isExpiredHold: isExpiredHoldRow(booking, now),

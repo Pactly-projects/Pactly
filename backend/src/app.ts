@@ -868,6 +868,9 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     }
   });
 
+  /** Booking detail for the owning client. Includes `serverTime` (UTC epoch
+   * seconds) alongside `cancelDeadline` so the free-cancellation countdown
+   * can follow the server clock and resync on every poll/refetch. */
   app.get("/bookings/:id", requirePactlyAuth, async (c) => {
     const bookingId = c.req.param("id");
     if (!bookingId) {

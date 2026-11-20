@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ApiError } from "../api/client";
 import {
@@ -11,6 +11,7 @@ import {
   submitBalancePayment,
   submitSignedTransaction,
 } from "../api/hooks";
+import { isFreeCancelOpen } from "../lib/serverCancel";
 import { LOCAL_CURRENCY_UNAVAILABLE_NOTE } from "../lib/money";
 import { signXdr, type Session } from "../wallet";
 import { useFormatTry } from "./TryAmount";
@@ -41,6 +42,13 @@ export interface BookingActionsProps {
    * "Pay balance": the spec's own "Always" rule, "only before the
    * appointment starts". */
   slotStartsAt: number | null;
+  /** UTC epoch seconds -- absent/null means no free-cancellation deadline
+   * (no countdown; cancel stays available). */
+  cancelDeadline?: number | null;
+  /** UTC epoch seconds from the booking payload. Together with
+   * `cancelDeadline`, decides whether the free-cancel action is still
+   * open -- never the browser clock alone. Resynced on each refetch. */
+  serverTime?: number;
   session?: Session;
   /** Called once an action's signed transaction has actually been relayed
    * (escrow actions), or once a balance action's own final outcome is
@@ -133,6 +141,8 @@ export function BookingActions({
   balance,
   balanceState,
   slotStartsAt,
+  cancelDeadline,
+  serverTime,
   session,
   onActionSubmitted,
   onUnauthorized,
@@ -141,6 +151,18 @@ export function BookingActions({
   const [notice, setNotice] = useState<{ text: string; alert?: boolean } | undefined>(undefined);
   const [disputeStep, setDisputeStep] = useState<DisputeStep>({ kind: "idle" });
   const [confirmingCash, setConfirmingCash] = useState(false);
+  const [syncedAtMs, setSyncedAtMs] = useState(() => Date.now());
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    setSyncedAtMs(Date.now());
+  }, [serverTime, cancelDeadline]);
+
+  useEffect(() => {
+    if (cancelDeadline == null || serverTime == null) return;
+    const interval = setInterval(() => setTick((n) => n + 1), 1_000);
+    return () => clearInterval(interval);
+  }, [cancelDeadline, serverTime]);
   /** Review follow-up (item 8): an ambiguous `PAYMENT_UNAVAILABLE` after the
    * client already signed means Pactly itself does not yet know whether the
    * payment landed -- "Pay balance" stays hidden/disabled until a refetch
@@ -350,6 +372,15 @@ export function BookingActions({
   const canApprove = canAct && viewer === "client" && (action === "funded" || action === "completed");
   const canRelease = canAct && viewer === "provider" && action === "approved";
   const canDispute = canAct && action !== "disputed" && action !== "released" && action !== "resolved";
+  // A missing deadline means there is no free-cancel window to gate on --
+  // the cancel shortcut stays available. When both values are present,
+  // openness follows the server clock (plus local elapsed since sync).
+  const freeCancelOpen =
+    cancelDeadline == null || serverTime == null
+      ? true
+      : isFreeCancelOpen({ cancelDeadline, serverTime, syncedAtMs });
+  const freeWindowEnded = cancelDeadline != null && serverTime != null && !freeCancelOpen;
+  const canFreeCancel = canDispute && freeCancelOpen;
   const hasBalanceToPay = balance.amount !== "0";
   const appointmentNotStarted = slotStartsAt === null || slotStartsAt > Math.floor(Date.now() / 1000);
   const canPayBalance = canAct && viewer === "client" && balanceState === "unpaid" && hasBalanceToPay && appointmentNotStarted && !verifyingBalance;
@@ -382,6 +413,11 @@ export function BookingActions({
 
   return (
     <div className="booking-actions">
+      {freeWindowEnded && canDispute && disputeStep.kind === "idle" && (
+        <p className="booking-card__notice" aria-live="polite">
+          The free-cancellation window has ended.
+        </p>
+      )}
       {disputeStep.kind === "idle" && (canComplete || canApprove || canRelease || canDispute) && (
         <div className="booking-card__actions">
           {canComplete && (
@@ -416,16 +452,18 @@ export function BookingActions({
           )}
           {canDispute && (
             <>
-              <button
-                type="button"
-                className="button-ghost"
-                disabled={isBusy}
-                onClick={() =>
-                  void pickDisputeReason(viewer === "client" ? "client-cancel" : "provider-cancel")
-                }
-              >
-                {busyAction === "dispute" ? "Opening…" : "Cancel booking"}
-              </button>
+              {canFreeCancel && (
+                <button
+                  type="button"
+                  className="button-ghost"
+                  disabled={isBusy}
+                  onClick={() =>
+                    void pickDisputeReason(viewer === "client" ? "client-cancel" : "provider-cancel")
+                  }
+                >
+                  {busyAction === "dispute" ? "Opening…" : "Cancel booking"}
+                </button>
+              )}
               <button type="button" className="button-ghost" disabled={isBusy} onClick={() => setDisputeStep({ kind: "picking-reason" })}>
                 Open a dispute
               </button>

@@ -212,11 +212,20 @@ test("GET /bookings/:id returns the owner's own booking view", async () => {
 
     const app = createApp(result.db);
     const headers = await authHeader(clientWalletAddress);
+    const before = Math.floor(Date.now() / 1000);
     const response = await app.request(`/bookings/${hold.bookingId}`, { headers });
+    const after = Math.floor(Date.now() / 1000);
     assert.equal(response.status, 200);
-    const body = (await response.json()) as { id: string; escrowState: string | null };
+    const body = (await response.json()) as {
+      id: string;
+      escrowState: string | null;
+      cancelDeadline: number;
+      serverTime: number;
+    };
     assert.equal(body.id, hold.bookingId);
     assert.equal(body.escrowState, null);
+    assert.equal(typeof body.cancelDeadline, "number");
+    assert.ok(body.serverTime >= before && body.serverTime <= after);
   } finally {
     closeDatabase(result);
   }

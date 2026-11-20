@@ -37,6 +37,8 @@ interface ListItem {
   balanceState: string;
   contractId: string | null;
   isExpiredHold: boolean;
+  cancelDeadline?: number;
+  serverTime?: number;
   provider?: { id: string; displayName: string; title: string };
   clientWalletAddress?: string;
 }
@@ -106,6 +108,8 @@ test("GET /me/bookings returns only the caller's own bookings, across providers,
     assert.equal(first.escrowState, null);
     assert.equal(first.balanceState, "unpaid");
     assert.equal(first.isExpiredHold, false);
+    assert.equal(typeof first.cancelDeadline, "number");
+    assert.equal(typeof first.serverTime, "number");
     assert.ok(first.provider);
   } finally {
     closeDatabase(result);

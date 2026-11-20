@@ -105,6 +105,7 @@ export function MyBookingsPage() {
               pendingAction={booking.pendingAction}
               balanceState={booking.balanceState}
               cancelDeadline={booking.cancelDeadline}
+              serverTime={booking.serverTime}
               contractId={booking.contractId}
               balancePaymentTxHash={booking.balancePaymentTxHash}
               session={session}
@@ -139,6 +140,7 @@ export function MyBookingsPage() {
                 pendingAction={booking.pendingAction}
                 balanceState={booking.balanceState}
                 cancelDeadline={booking.cancelDeadline}
+                serverTime={booking.serverTime}
                 contractId={booking.contractId}
                 balancePaymentTxHash={booking.balancePaymentTxHash}
                 session={session}

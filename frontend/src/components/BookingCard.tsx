@@ -31,8 +31,10 @@ export interface BookingCardProps {
    * {@link BookingActions} -- see its own doc comment. */
   pendingAction?: PendingActionKind;
   balanceState: BalanceState;
-  /** UTC epoch seconds. */
-  cancelDeadline: number;
+  /** UTC epoch seconds -- absent/null means no free-cancellation countdown. */
+  cancelDeadline: number | null;
+  /** UTC epoch seconds -- server clock from the booking payload. */
+  serverTime: number;
   /** The explorer link (AC4) appears only when this exists. */
   contractId: string | null;
   /** Story 3.7: the on-chain transaction hash once the balance was paid
@@ -87,6 +89,7 @@ export function BookingCard({
   pendingAction,
   balanceState,
   cancelDeadline,
+  serverTime,
   contractId,
   balancePaymentTxHash,
   session,
@@ -133,7 +136,7 @@ export function BookingCard({
         </a>
       )}
 
-      <Countdown cancelDeadline={cancelDeadline} depositLocked={escrowState === "locked"} />
+      <Countdown cancelDeadline={cancelDeadline} serverTime={serverTime} depositLocked={escrowState === "locked"} />
 
       {continueHref && (
         <Link to={continueHref} className="button-primary" style={{ textDecoration: "none", display: "inline-flex", marginTop: "var(--space-3)" }}>
@@ -163,6 +166,8 @@ export function BookingCard({
         balance={balance}
         balanceState={balanceState}
         slotStartsAt={slotStartsAt}
+        cancelDeadline={cancelDeadline}
+        serverTime={serverTime}
         session={session}
         onActionSubmitted={onActionSubmitted}
         onUnauthorized={onUnauthorized}

@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
 
+import { remainingFreeCancelSeconds } from "../lib/serverCancel";
+
 export interface CountdownProps {
-  /** UTC epoch seconds -- `bookings.cancel_deadline`. */
-  cancelDeadline: number;
+  /** UTC epoch seconds -- `bookings.cancel_deadline`. Absent/null means
+   * this booking has no free-cancellation deadline; no countdown is shown. */
+  cancelDeadline: number | null | undefined;
+  /** UTC epoch seconds from the booking payload. Required whenever a
+   * deadline is present -- the countdown is computed from this and
+   * `cancelDeadline`, not from the browser clock alone. */
+  serverTime: number | undefined;
   /** Free-cancellation copy only applies once the deposit is actually in
    * escrow. A hold with no lock has nothing to refund yet. */
   depositLocked?: boolean;
@@ -37,12 +44,22 @@ function formatDurationLabel(totalSeconds: number): string {
  * passed -- worded so it never claims any money has actually moved, since
  * automatic policy enforcement is not something this backend does (Epic 3
  * context: "Nothing here is automatic").
+ *
+ * Remaining time is `cancelDeadline - (serverTime + elapsedSinceSync)`.
+ * Each refetch supplies a fresh `serverTime`, which resyncs the offset.
  */
-export function Countdown({ cancelDeadline, depositLocked = true }: CountdownProps) {
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+export function Countdown({ cancelDeadline, serverTime, depositLocked = true }: CountdownProps) {
+  const [syncedAtMs, setSyncedAtMs] = useState(() => Date.now());
+  const [, setTick] = useState(0);
+
+  // Resync the local elapsed baseline whenever the server clock (or
+  // deadline) arrives or is refreshed from a refetch.
+  useEffect(() => {
+    setSyncedAtMs(Date.now());
+  }, [serverTime, cancelDeadline]);
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(Math.floor(Date.now() / 1000)), TICK_MS);
+    const interval = setInterval(() => setTick((n) => n + 1), TICK_MS);
     return () => clearInterval(interval);
   }, []);
 
@@ -54,12 +71,25 @@ export function Countdown({ cancelDeadline, depositLocked = true }: CountdownPro
     );
   }
 
-  const secondsLeft = cancelDeadline - now;
+  if (cancelDeadline == null || serverTime == null) {
+    return null;
+  }
+
+  const secondsLeft = remainingFreeCancelSeconds({
+    cancelDeadline,
+    serverTime,
+    syncedAtMs,
+  });
+
+  if (secondsLeft === null) {
+    return null;
+  }
 
   if (secondsLeft <= 0) {
     return (
       <p className="countdown countdown--alert" aria-live="polite">
-        Window closed · a cancellation now follows this booking's resolution policy, not an automatic refund
+        Window closed · the free-cancellation window has ended. A cancellation now follows this booking's resolution policy, not an
+        automatic refund
       </p>
     );
   }

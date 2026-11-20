@@ -120,6 +120,8 @@ export interface HoldSlotResponse {
   price: Money;
   /** UTC epoch seconds. */
   cancelDeadline: number;
+  /** UTC epoch seconds -- server clock at response time. */
+  serverTime: number;
   provider: BookingProviderSummary;
   /** `true` only when the free-cancellation window had already passed at
    * the moment of the hold -- omitted (never `false`) otherwise. */
@@ -164,6 +166,10 @@ export interface BookingView {
   price: Money;
   slotStartsAt: number | null;
   cancelDeadline: number;
+  /** UTC epoch seconds -- server clock at response time. Resynced on every
+   * refetch so the free-cancellation countdown stays aligned with the
+   * clock that will accept or refuse a cancel. */
+  serverTime: number;
   provider: BookingProviderSummary;
   /** Story 3.7: the on-chain transaction hash once the balance was paid
    * through Pactly (`null` for unpaid or paid-in-cash) -- drives the
@@ -202,6 +208,8 @@ export interface BookingListItemBase {
   balancePaymentTxHash: string | null;
   /** UTC epoch seconds. */
   cancelDeadline: number;
+  /** UTC epoch seconds -- server clock at response time. */
+  serverTime: number;
   contractId: string | null;
   /** UTC epoch seconds. */
   holdExpiresAt: number | null;

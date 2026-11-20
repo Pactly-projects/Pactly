@@ -617,6 +617,12 @@ export function BookingPage() {
   }
 
   const cancelDeadline = hold?.cancelDeadline ?? slotStartsAt - profile.cancellationWindowHours * 3600;
+  // Free-cancel openness follows the hold payload's serverTime +
+  // cancelDeadline (and the server's own freeCancellationEnded flag),
+  // never the browser clock alone.
+  const freeCancellationEnded = hold
+    ? hold.freeCancellationEnded === true || hold.cancelDeadline <= hold.serverTime
+    : false;
   const depositAmount = hold?.deposit.amount ?? profile.deposit.amount;
   const balanceAmount = hold?.balance.amount;
   const waitingOn =
@@ -658,15 +664,15 @@ export function BookingPage() {
             )}
             <div className="booking-summary__row">
               <span>Free cancellation until</span>
-              <strong>{hold?.freeCancellationEnded ? "already passed" : formatDeadline(cancelDeadline)}</strong>
+              <strong>{freeCancellationEnded ? "already passed" : formatDeadline(cancelDeadline)}</strong>
             </div>
           </div>
 
           <div className="booking-summary-note">
             <b>YOUR PROTECTION</b>
             <p>
-              {hold?.freeCancellationEnded
-                ? "The free-cancellation window has already passed for this appointment. A cancellation from here goes through resolution under the booking policy."
+              {freeCancellationEnded
+                ? "The free-cancellation window has ended for this appointment. A cancellation from here goes through resolution under the booking policy."
                 : `Your booking policy says cancelling before ${formatDeadline(cancelDeadline)} returns all ${formatTryAmount(depositAmount)} through resolution.`}{" "}
               You (as approver) or the provider may sign the supported resolution; Pactly resolves a dispute only after one is opened on
               chain.
@@ -828,7 +834,7 @@ export function BookingPage() {
             <DepositPill
               amount={depositAmount}
               cancellationWindowHours={profile.cancellationWindowHours}
-              freeCancellationEnded={hold?.freeCancellationEnded}
+              freeCancellationEnded={freeCancellationEnded || undefined}
             />
           </div>
           <div className="booking-summary-note booking-summary-note--pro">
