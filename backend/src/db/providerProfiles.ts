@@ -180,6 +180,8 @@ export interface ProviderRulesValues {
   priceAmount: string;
   depositRateBps: number;
   cancellationWindowHours: number;
+  /** Issue #36: minimum notice in minutes (0-10080). */
+  minimumNoticeMinutes?: number;
 }
 
 /** `services/profile.ts`'s `updateProviderRules` write path -- the one
@@ -230,13 +232,18 @@ export async function setProviderProfileApproved(db: Db, id: string, isApproved:
 }
 
 export async function updateProviderProfileRules(db: Db, id: string, values: ProviderRulesValues): Promise<void> {
+  const updateFields: Record<string, string | number> = {
+    priceAmount: values.priceAmount,
+    depositRateBps: values.depositRateBps,
+    cancellationWindowHours: values.cancellationWindowHours,
+  };
+  // Issue #36: only update minimum notice if provided
+  if (values.minimumNoticeMinutes !== undefined) {
+    updateFields.minimumNoticeMinutes = values.minimumNoticeMinutes;
+  }
   const result = await db
     .update(providerProfiles)
-    .set({
-      priceAmount: values.priceAmount,
-      depositRateBps: values.depositRateBps,
-      cancellationWindowHours: values.cancellationWindowHours,
-    })
+    .set(updateFields)
     .where(eq(providerProfiles.id, id));
   if (result.changes === 0) {
     throw new TypeError(`No provider profile exists with id "${id}"`);

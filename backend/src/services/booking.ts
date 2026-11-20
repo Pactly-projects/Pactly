@@ -318,6 +318,13 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
   if (!slot || slot.startsAt <= now) {
     throw new SlotUnavailableError();
   }
+  // Issue #36: check minimum notice
+  if (profile.minimumNoticeMinutes > 0) {
+    const minStartTime = now + profile.minimumNoticeMinutes * 60;
+    if (slot.startsAt < minStartTime) {
+      throw new SlotUnavailableError();
+    }
+  }
 
   const provider: BookingProviderSummary = { id: profile.id, displayName: profile.displayName, title: profile.title };
 

@@ -213,6 +213,10 @@ export function runMigrations(sqlite: Database): void {
   if (!hasColumn(sqlite, "provider_profiles", "location")) {
     sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN location TEXT NOT NULL DEFAULT ''`);
   }
+  // Issue #36: minimum notice minutes (0-7 days)
+  if (!hasColumn(sqlite, "provider_profiles", "minimum_notice_minutes")) {
+    sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN minimum_notice_minutes INTEGER NOT NULL DEFAULT 0`);
+  }
   // Story 3.4: the AD-13 slot hold's own columns -- nullable, since a
   // database created before this story has `bookings` rows that never had a
   // slot or a hold expiry (and never will retroactively).

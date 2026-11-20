@@ -159,6 +159,11 @@ export async function listOpenFutureSlots(
   if (options.withinSeconds !== undefined) {
     conditions.push(lte(availabilitySlots.startsAt, now + options.withinSeconds));
   }
+  // Issue #36: filter out slots within minimum notice period
+  if (options.minimumNoticeMinutes && options.minimumNoticeMinutes > 0) {
+    const minStartTime = now + options.minimumNoticeMinutes * 60;
+    conditions.push(gte(availabilitySlots.startsAt, minStartTime));
+  }
   return db
     .select()
     .from(availabilitySlots)

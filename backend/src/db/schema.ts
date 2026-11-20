@@ -79,6 +79,10 @@ export const providerProfiles = sqliteTable("provider_profiles", {
   priceAmount: text("price_amount").notNull(),
   depositRateBps: integer("deposit_rate_bps").notNull(),
   cancellationWindowHours: integer("cancellation_window_hours").notNull(),
+  /** Issue #36: minimum notice in minutes (0-10080, i.e. 0-7 days). Slots
+   * sooner than this are not offered/held. Zero means immediate booking.
+   * Defaults to 0 for profiles created before this field. */
+  minimumNoticeMinutes: integer("minimum_notice_minutes").notNull().default(0),
   isApproved: integer("is_approved", { mode: "boolean" }).notNull().default(false),
   /** Increases only on the chain's `released` event (FR20); never written
    * by hand outside the event worker's own bookkeeping. */
