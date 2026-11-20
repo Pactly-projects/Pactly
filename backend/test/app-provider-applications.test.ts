@@ -34,6 +34,53 @@ async function bearer(walletAddress: string): Promise<{ authorization: string; "
   return { authorization: `Bearer ${await issuePactlyJwt(walletAddress)}`, "content-type": "application/json" };
 }
 
+test("deposit preview matches the deposit stored on apply; out-of-range rate is 400", async () => {
+  const result = openTestDatabase();
+  try {
+    const categoryId = await seedCategory(result, "cat-deposit-preview");
+    const app = createApp(result.db);
+    const headers = await bearer(APPLICANT);
+    const priceAmount = "20000000";
+    const depositRateBps = 2500;
+
+    const preview = await app.request("/me/provider/application/deposit-preview", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ priceAmount, depositRateBps, deposit: { amount: "1", asset: "USDC" } }),
+    });
+    assert.equal(preview.status, 200);
+    const previewBody = (await preview.json()) as { deposit: { amount: string; asset: string } };
+    assert.equal(previewBody.deposit.amount, "5000000");
+    assert.equal(previewBody.deposit.asset, "USDC");
+
+    const badRate = await app.request("/me/provider/application/deposit-preview", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ priceAmount, depositRateBps: 0 }),
+    });
+    assert.equal(badRate.status, 400);
+    const badBody = (await badRate.json()) as { code: string; details: Record<string, string> };
+    assert.equal(badBody.code, "INVALID_APPLICATION");
+    assert.equal(typeof badBody.details.depositRateBps, "string");
+
+    const created = await app.request("/me/provider/application", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        ...validApplication(categoryId),
+        priceAmount,
+        depositRateBps,
+        deposit: { amount: "999", asset: "USDC" },
+      }),
+    });
+    assert.equal(created.status, 201);
+    const body = (await created.json()) as { application: { deposit: { amount: string } } };
+    assert.equal(body.application.deposit.amount, previewBody.deposit.amount);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
 test("applying creates a pending application and an unlisted, unapproved profile (4.1 AC2/AC4)", async () => {
   const result = openTestDatabase();
   try {

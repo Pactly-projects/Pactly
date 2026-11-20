@@ -102,6 +102,14 @@ export interface ProviderApplicationInput {
   cancellationWindowHours: number;
 }
 
+/** Price + deposit rate only -- what the apply form asks the server to
+ * preview before submit. Cancellation window is irrelevant to the math. */
+export interface DepositPreviewInput {
+  /** Integer string, smallest unit (AD-7). */
+  priceAmount: string;
+  depositRateBps: number;
+}
+
 function cleanText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -141,6 +149,31 @@ export function validateProviderApplication(input: ProviderApplicationInput): Re
   }
 
   return details;
+}
+
+/** `POST /me/provider/application/deposit-preview`: the deposit the
+ * server will store for this price and rate, in the escrow asset
+ * (USDC). Refuses an out-of-range rate (or invalid price) with the same
+ * field errors apply uses -- the form must not invent its own number. */
+export function previewApplicationDeposit(input: DepositPreviewInput): { amount: string; asset: string } {
+  // Reuse the shared money rules with a dummy window so only price/rate
+  // can fail; the window is not part of the preview contract.
+  const rules = validateProviderRules({
+    priceAmount: input.priceAmount,
+    depositRateBps: input.depositRateBps,
+    cancellationWindowHours: 0,
+  });
+  const details: Record<string, string> = {};
+  if (rules.priceAmount !== undefined) {
+    details.priceAmount = rules.priceAmount;
+  }
+  if (rules.depositRateBps !== undefined) {
+    details.depositRateBps = rules.depositRateBps;
+  }
+  if (Object.keys(details).length > 0) {
+    throw new InvalidProviderApplicationError(details);
+  }
+  return { amount: computeDepositAmount(input.priceAmount, input.depositRateBps), asset: ASSET };
 }
 
 export interface ProviderApplicationView {

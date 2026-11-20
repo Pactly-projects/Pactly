@@ -73,6 +73,7 @@ import {
   decideApplication,
   getOwnProviderApplication,
   listPendingApplications,
+  previewApplicationDeposit,
 } from "./services/providerApplications.js";
 import {
   BookingActionPendingError,
@@ -676,11 +677,35 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     }
   });
 
+  /** Live deposit the apply form shows -- price + rate in, escrow-asset
+   * amount out. A client-supplied `deposit` field is ignored; the server
+   * always recomputes. Out-of-range rate (or bad price) is 400 with no
+   * preview body. */
+  app.post("/me/provider/application/deposit-preview", requirePactlyAuth, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const int = (value: unknown) => (typeof value === "number" ? value : Number.NaN);
+    try {
+      const deposit = previewApplicationDeposit({
+        priceAmount: text(body?.priceAmount),
+        depositRateBps: int(body?.depositRateBps),
+      });
+      return c.json({ deposit });
+    } catch (error) {
+      if (error instanceof InvalidProviderApplicationError) {
+        return c.json({ code: "INVALID_APPLICATION", message: error.message, details: error.details }, 400);
+      }
+      throw error;
+    }
+  });
+
   app.post("/me/provider/application", requirePactlyAuth, async (c) => {
     const body = await c.req.json().catch(() => undefined);
     const text = (value: unknown) => (typeof value === "string" ? value : "");
     const int = (value: unknown) => (typeof value === "number" ? value : Number.NaN);
     try {
+      // Price + rate only; any client-supplied deposit is ignored -- the
+      // service recomputes via computeDepositAmount on read.
       const application = await applyAsProvider(db, c.get("walletAddress"), {
         name: text(body?.name),
         title: text(body?.title),

@@ -420,6 +420,17 @@ export interface ProviderApplicationInput {
   cancellationWindowHours: number;
 }
 
+/** `POST /me/provider/application/deposit-preview` -- price + rate in,
+ * escrow-asset deposit out (same shape the application stores). */
+export interface DepositPreviewInput {
+  priceAmount: string;
+  depositRateBps: number;
+}
+
+export interface DepositPreviewResponse {
+  deposit: Money;
+}
+
 export interface OwnProviderApplicationResponse {
   application: ProviderApplication;
 }

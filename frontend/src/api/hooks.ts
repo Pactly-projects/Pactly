@@ -30,6 +30,8 @@ import type {
   OpenLocalDepositResponse,
   AdminApplicationsResponse,
   AdminProviderApplication,
+  DepositPreviewInput,
+  DepositPreviewResponse,
   OwnProviderApplicationResponse,
   ProviderApplicationInput,
   ProviderApplicationOutcome,
@@ -448,6 +450,22 @@ export function useSubmitProviderApplication(session: Session | undefined) {
       // must not keep serving a cached NOT_A_PROVIDER.
       void queryClient.invalidateQueries({ queryKey: OWN_PROVIDER_KEY(session?.walletAddress) });
     },
+  });
+}
+
+/** Live deposit for the apply form -- the number on screen is whatever
+ * this returns. Disabled until both price and rate look parseable; a
+ * 400 from the server is a failed preview (caller blocks submit). */
+export function useApplicationDepositPreview(
+  session: Session | undefined,
+  input: DepositPreviewInput | undefined,
+) {
+  return useQuery({
+    queryKey: ["me", "provider", "application", "deposit-preview", session?.walletAddress, input?.priceAmount, input?.depositRateBps],
+    queryFn: () =>
+      apiPost<DepositPreviewResponse>("/me/provider/application/deposit-preview", input, session?.token),
+    enabled: Boolean(session && input?.priceAmount && Number.isInteger(input.depositRateBps)),
+    retry: false,
   });
 }
 
