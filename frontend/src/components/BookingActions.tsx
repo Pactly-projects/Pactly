@@ -141,6 +141,10 @@ export function BookingActions({
   const [notice, setNotice] = useState<{ text: string; alert?: boolean } | undefined>(undefined);
   const [disputeStep, setDisputeStep] = useState<DisputeStep>({ kind: "idle" });
   const [confirmingCash, setConfirmingCash] = useState(false);
+  /** Issue #22: the note and evidence hash the disputing party attaches to
+   * the dispute before confirming it. */
+  const [disputeNote, setDisputeNote] = useState("");
+  const [disputeEvidenceHash, setDisputeEvidenceHash] = useState("");
   /** Review follow-up (item 8): an ambiguous `PAYMENT_UNAVAILABLE` after the
    * client already signed means Pactly itself does not yet know whether the
    * payment landed -- "Pay balance" stays hidden/disabled until a refetch
@@ -233,7 +237,7 @@ export function BookingActions({
     setBusyAction("dispute");
     setNotice(undefined);
     try {
-      const result = await openDispute(id, reason, session);
+      const result = await openDispute(id, reason, session, disputeNote, disputeEvidenceHash);
       setDisputeStep({ kind: "confirming", reason, suggestedOutcome: result.suggestedOutcome, unsignedXdr: result.unsignedXdr });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -475,6 +479,24 @@ export function BookingActions({
         <div className="booking-card__dispute-panel">
           <p>What's this about?</p>
           <div className="booking-card__actions">
+            <label>
+              Note (optional)
+              <input
+                className="input"
+                value={disputeNote}
+                onChange={(e) => setDisputeNote(e.target.value)}
+                placeholder="Add a note about this dispute"
+              />
+            </label>
+            <label>
+              Evidence hash (optional)
+              <input
+                className="input"
+                value={disputeEvidenceHash}
+                onChange={(e) => setDisputeEvidenceHash(e.target.value)}
+                placeholder="SHA-256 hash of a document (64 hex chars)"
+              />
+            </label>
             {DISPUTE_REASON_OPTIONS[viewer].map((option) => (
               <button key={option.value} type="button" className="button-ghost" disabled={isBusy} onClick={() => void pickDisputeReason(option.value)}>
                 {option.label}

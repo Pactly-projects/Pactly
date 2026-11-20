@@ -230,6 +230,25 @@ export interface ProviderBookingsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #31: the in-app event list (lock, release, dispute, resolve).
+// ---------------------------------------------------------------------------
+
+export type EscrowEventType = "lock" | "release" | "dispute" | "resolve";
+
+export interface EscrowEvent {
+  id: string;
+  bookingId: string;
+  walletAddress: string;
+  type: EscrowEventType;
+  /** UTC epoch seconds. */
+  createdAt: number;
+}
+
+export interface MyEventsResponse {
+  events: EscrowEvent[];
+}
+
+// ---------------------------------------------------------------------------
 // Story 3.6: appointment completion, release and resolution. Mirrors
 // `backend/src/services/booking.ts` and `backend/src/app.ts`'s response
 // shapes exactly, same discipline as the rest of this file.
@@ -258,6 +277,10 @@ export type DisputeOpenerRole = "client" | "provider";
 export interface OpenDisputeResponse extends ActionResponse {
   reason: DisputeReason;
   suggestedOutcome?: DisputeOutcome;
+  /** Issue #22: the note the opener attached (free text, may be empty). */
+  note?: string;
+  /** Issue #22: the SHA-256 hex evidence hash the opener attached (or undefined). */
+  evidenceHash?: string;
 }
 
 /** `POST /admin/bookings/:id/resolve`'s response. */

@@ -19,7 +19,9 @@ import { StrKey } from "@stellar/stellar-sdk";
 import { createApp } from "../src/app.js";
 import { issuePactlyJwt } from "../src/auth/challenge.js";
 import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
-import { getBookingById } from "../src/db/bookings.js";
+import { getBookingById, insertBooking, updateEscrowContractId, updateEscrowState } from "../src/db/bookings.js";
+import { insertProviderProfile } from "../src/db/providerProfiles.js";
+import { availabilitySlots, categories } from "../src/db/schema.js";
 import { holdSlot, TooManyHoldsError } from "../src/services/booking.js";
 import { resetUsdcAssetCacheForTests, resolveUsdcAsset } from "../src/anchor/usdc.js";
 import type { EscrowAdapter } from "../src/escrow/interface.js";
@@ -511,6 +513,97 @@ test("POST /bookings/:id/lock with an injected adapter that accepts the deploy r
     const rebuiltBody = (await rebuilt.json()) as { contractId: string };
     assert.equal(rebuiltBody.contractId, "contract-2");
     assert.equal(deployCalls, 2);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Issue #26: GET /bookings/:id/ics
+// ---------------------------------------------------------------------------
+
+test("GET /bookings/:id/ics: 200 returns an ICS file for a locked booking; 409 when not locked", async () => {
+  const result = openTestDatabase();
+  try {
+    await result.db.insert(categories).values({ id: "cat-ics", name: "Consulting", slug: "consulting" });
+    const providerProfileId = "prov-ics";
+    await insertProviderProfile(result.db, {
+      id: providerProfileId,
+      walletAddress: "GPROV0000000000000000000000000000000000000000",
+      categoryId: "cat-ics",
+      displayName: "Test Clinic",
+      title: "Therapist",
+      location: "Istanbul",
+      bio: "",
+      languages: [],
+      sessionFormat: "in_person",
+      sessionLengthMinutes: 50,
+      priceAmount: "10000000",
+      depositRateBps: 2000,
+      cancellationWindowHours: 24,
+      isApproved: true,
+      createdAt: Date.now(),
+    });
+    const slotStartsAt = Math.floor(Date.now() / 1000) + 3600;
+    await result.db.insert(availabilitySlots).values({
+      id: "slot-ics",
+      providerProfileId,
+      startsAt: slotStartsAt,
+      createdAt: Date.now(),
+    });
+    const bookingId = "booking-ics";
+    await insertBooking(result.db, {
+      id: bookingId,
+      providerProfileId,
+      clientWalletAddress: "GCLIENT0000000000000000000000000000000000000000",
+      tokenAddress: "CTOKEN0000000000000000000000000000000000000000",
+      depositAmount: "2000000",
+      balanceAmount: "8000000",
+      cancelDeadline: slotStartsAt - 3600,
+      slotId: "slot-ics",
+      holdExpiresAt: slotStartsAt + 3600,
+      createdAt: Date.now(),
+    });
+    await updateEscrowContractId(result.db, bookingId, "CESCOROW0000000000000000000000000000000000000000");
+    await updateEscrowState(result.db, bookingId, "locked");
+
+    const app = createApp(result.db);
+    const locked = await app.request(`/bookings/${bookingId}/ics`, {
+      headers: await authHeader("GCLIENT0000000000000000000000000000000000000000"),
+    });
+    assert.equal(locked.status, 200);
+    assert.ok(locked.headers.get("content-type")?.startsWith("text/calendar"));
+    const text = await locked.text();
+    assert.ok(text.includes("BEGIN:VCALENDAR"));
+    assert.ok(text.includes("DTSTART:"));
+    assert.ok(text.includes("DTEND:"));
+    assert.ok(text.includes("Test Clinic"));
+    assert.ok(text.includes("booking-ics"));
+    // Times are UTC with a Z suffix.
+    assert.ok(/DTSTART:\d{8}T\d{6}Z/.test(text));
+    assert.ok(/DTEND:\d{8}T\d{6}Z/.test(text));
+    // No deposit transaction or wallet secret in the file.
+    assert.ok(!text.includes("GCLIENT"));
+    assert.ok(!text.includes("2000000"));
+
+    // A hold that is not yet locked does not offer the file.
+    const openBookingId = "booking-open";
+    await insertBooking(result.db, {
+      id: openBookingId,
+      providerProfileId,
+      clientWalletAddress: "GCLIENT0000000000000000000000000000000000000001",
+      tokenAddress: "CTOKEN0000000000000000000000000000000000000001",
+      depositAmount: "2000000",
+      balanceAmount: "8000000",
+      cancelDeadline: slotStartsAt - 3600,
+      slotId: "slot-ics",
+      holdExpiresAt: slotStartsAt + 3600,
+      createdAt: Date.now(),
+    });
+    const notLocked = await app.request(`/bookings/${openBookingId}/ics`, {
+      headers: await authHeader("GCLIENT0000000000000000000000000000000000000001"),
+    });
+    assert.equal(notLocked.status, 409);
   } finally {
     closeDatabase(result);
   }

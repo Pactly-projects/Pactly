@@ -509,7 +509,7 @@ test("resolveBookingDispute (pay-provider) builds one full-amount distribution t
   }
 });
 
-test("a second decision replaces the first, rather than raising a raw SQLite error or getting stuck", async () => {
+test("a second resolve returns the stored outcome and does not call the escrow again", async () => {
   const result = openTestDatabase();
   try {
     const bookingId = await seedBooking(result);
@@ -519,26 +519,33 @@ test("a second decision replaces the first, rather than raising a raw SQLite err
     await markDisputed(result.db, bookingId, contractId, "5000000");
 
     let txHash = "first-attempt-tx-hash";
+    let resolveCallCount = 0;
     const adapter: EscrowAdapter = {
       ...unreachableEscrowAdapter(),
-      resolveDispute: async () => ({ unsignedXdr: "x", txHash }),
+      resolveDispute: async () => {
+        resolveCallCount += 1;
+        return { unsignedXdr: "x", txHash };
+      },
     };
 
     const first = await resolveBookingDispute(result.db, bookingId, "refund-client", adapter);
     assert.equal(first.txHash, "first-attempt-tx-hash");
+    assert.equal(resolveCallCount, 1);
     const firstRecorded = await getEscrowDisputeResolution(result.db, bookingId);
     assert.equal(firstRecorded?.outcome, "refund-client");
     assert.equal(firstRecorded?.txHash, "first-attempt-tx-hash");
 
-    // The first attempt's XDR was never signed (expired, or the wrong
-    // outcome was chosen) -- a second, corrected attempt must replace it,
-    // not be permanently blocked by it.
+    // Issue #33: a second resolve returns the stored outcome and does not
+    // call the escrow again. The original decision stands.
     txHash = "second-attempt-tx-hash";
     const second = await resolveBookingDispute(result.db, bookingId, "pay-provider", adapter);
-    assert.equal(second.txHash, "second-attempt-tx-hash");
+    assert.equal(second.outcome, "refund-client");
+    assert.equal(second.txHash, "first-attempt-tx-hash");
+    assert.equal(resolveCallCount, 1);
+
     const secondRecorded = await getEscrowDisputeResolution(result.db, bookingId);
-    assert.equal(secondRecorded?.outcome, "pay-provider");
-    assert.equal(secondRecorded?.txHash, "second-attempt-tx-hash");
+    assert.equal(secondRecorded?.outcome, "refund-client");
+    assert.equal(secondRecorded?.txHash, "first-attempt-tx-hash");
   } finally {
     closeDatabase(result);
   }

@@ -143,6 +143,8 @@ const STATEMENTS: readonly string[] = [
     reason TEXT NOT NULL,
     suggested_outcome TEXT,
     tx_hash TEXT NOT NULL,
+    note TEXT,
+    evidence_hash TEXT,
     opened_at INTEGER NOT NULL
   )`,
   // Passkey pivot: users with an embedded custodial account, their passkey
@@ -273,6 +275,13 @@ export function runMigrations(sqlite: Database): void {
   if (!hasColumn(sqlite, "bookings", "pending_dispute_opener_role")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN pending_dispute_opener_role TEXT`);
   }
+  // Issue #22: the pending dispute's note and evidence hash.
+  if (!hasColumn(sqlite, "bookings", "pending_dispute_note")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN pending_dispute_note TEXT`);
+  }
+  if (!hasColumn(sqlite, "bookings", "pending_dispute_evidence_hash")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN pending_dispute_evidence_hash TEXT`);
+  }
   if (!hasColumn(sqlite, "bookings", "escrow_complete_submitted_at")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN escrow_complete_submitted_at INTEGER`);
   }
@@ -290,6 +299,26 @@ export function runMigrations(sqlite: Database): void {
   }
   if (!hasColumn(sqlite, "escrow_dispute_openings", "opened_by_role")) {
     sqlite.exec(`ALTER TABLE escrow_dispute_openings ADD COLUMN opened_by_role TEXT`);
+  }
+  // Issue #22: a dispute note and an evidence hash the opener can attach.
+  if (!hasColumn(sqlite, "escrow_dispute_openings", "note")) {
+    sqlite.exec(`ALTER TABLE escrow_dispute_openings ADD COLUMN note TEXT`);
+  }
+  if (!hasColumn(sqlite, "escrow_dispute_openings", "evidence_hash")) {
+    sqlite.exec(`ALTER TABLE escrow_dispute_openings ADD COLUMN evidence_hash TEXT`);
+  }
+
+  // Issue #31: one in-app event row per party per booking-level action
+  // (lock, release, dispute, resolve), visible to each party on bookings
+  // they belong to.
+  if (!hasColumn(sqlite, "escrow_events", "id")) {
+    sqlite.exec(`CREATE TABLE IF NOT EXISTS escrow_events (
+      id TEXT PRIMARY KEY,
+      booking_id TEXT NOT NULL REFERENCES bookings(id),
+      wallet_address TEXT NOT NULL,
+      type TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`);
   }
 
   // Story 3.7: paying the balance before the session -- independent of the

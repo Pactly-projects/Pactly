@@ -24,6 +24,11 @@ export interface NewEscrowDisputeOpening {
    * policy names no automatic outcome for a plain disagreement. */
   suggestedOutcome?: DisputeOutcome;
   txHash: string;
+  /** Issue #22: the note the opener attached (free text, may be empty). */
+  note?: string;
+  /** Issue #22: the SHA-256 hex evidence hash the opener attached
+   * (64 lowercase hex characters, or undefined). */
+  evidenceHash?: string;
   /** UTC epoch seconds. */
   openedAt: number;
 }
@@ -38,7 +43,12 @@ export interface NewEscrowDisputeOpening {
 export async function recordEscrowDisputeOpening(db: Db, values: NewEscrowDisputeOpening): Promise<void> {
   await db
     .insert(escrowDisputeOpenings)
-    .values({ ...values, suggestedOutcome: values.suggestedOutcome ?? null })
+    .values({
+      ...values,
+      suggestedOutcome: values.suggestedOutcome ?? null,
+      note: values.note ?? null,
+      evidenceHash: values.evidenceHash ?? null,
+    })
     .onConflictDoUpdate({
       target: escrowDisputeOpenings.bookingId,
       set: {
@@ -48,6 +58,8 @@ export async function recordEscrowDisputeOpening(db: Db, values: NewEscrowDisput
         reason: values.reason,
         suggestedOutcome: values.suggestedOutcome ?? null,
         txHash: values.txHash,
+        note: values.note ?? null,
+        evidenceHash: values.evidenceHash ?? null,
         openedAt: values.openedAt,
       },
     });

@@ -17,6 +17,7 @@ import type {
   HoldSlotResponse,
   LockResponse,
   MyBookingsResponse,
+  MyEventsResponse,
   OpenDisputeResponse,
   ProviderBookingsResponse,
   ProviderProfile,
@@ -297,6 +298,17 @@ export function useMyBookings(session: Session | undefined) {
   });
 }
 
+/** Issue #31: the signed-in wallet's own in-app event list (lock, release,
+ * dispute, resolve) across every booking they are a party to, newest first. */
+export function useMyEvents(session: Session | undefined) {
+  return useQuery({
+    queryKey: ["me", "events", session?.walletAddress],
+    queryFn: () => apiGet<MyEventsResponse>("/me/events", session?.token),
+    enabled: Boolean(session),
+    retry: false,
+  });
+}
+
 /** `GET /me/provider/bookings` -- the provider panel's "Bookings" view. */
 export function useProviderBookings(session: Session | undefined) {
   return useQuery({
@@ -335,8 +347,14 @@ export function releaseDeposit(bookingId: string, session: Session): Promise<Act
  * resolution" -- policy guidance stated first, chain state kept separate).
  * Building this XDR has no on-chain effect by itself; nothing moves unless
  * the caller goes on to sign and submit it. */
-export function openDispute(bookingId: string, reason: DisputeReason, session: Session): Promise<OpenDisputeResponse> {
-  return apiPost<OpenDisputeResponse>(`/bookings/${bookingId}/dispute`, { reason }, session.token);
+export function openDispute(
+  bookingId: string,
+  reason: DisputeReason,
+  session: Session,
+  note = "",
+  evidenceHash = "",
+): Promise<OpenDisputeResponse> {
+  return apiPost<OpenDisputeResponse>(`/bookings/${bookingId}/dispute`, { reason, note, evidenceHash }, session.token);
 }
 
 /** Pactly's own dispute-resolver signature -- only ever callable by the

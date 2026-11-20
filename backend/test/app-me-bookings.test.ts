@@ -19,8 +19,9 @@ import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
 import { updateEscrowContractId, updateEscrowState } from "../src/db/bookings.js";
 import { insertEscrowProcessedEventIfNew } from "../src/db/escrowProcessedEvents.js";
 import { recordEscrowDisputeResolution } from "../src/db/escrowDisputeResolutions.js";
+import { recordEscrowEventForBothParties, listEscrowEventsForParties } from "../src/db/escrowEvents.js";
 import { holdSlot } from "../src/services/booking.js";
-import { closeDatabase, openTestDatabase, seedProviderProfile } from "./helpers.js";
+import { closeDatabase, openTestDatabase, seedBooking, seedProviderProfile } from "./helpers.js";
 
 const FAKE_USDC_DEPS = { resolveUsdcAsset: async () => ({ contractId: "CUSDCFAKE00000000000000000000000000000000000000000" }) };
 
@@ -387,6 +388,61 @@ test("an expired hold is listed with isExpiredHold: true, never dropped", async 
     assert.ok(item, "the expired hold's booking must still be returned, never dropped");
     assert.equal(item?.isExpiredHold, true);
     assert.equal(item?.escrowState, null);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Issue #31: GET /me/events
+// ---------------------------------------------------------------------------
+
+test("GET /me/events: lists the wallet's own lock/release/dispute/resolve events, newest first", async () => {
+  const result = openTestDatabase();
+  try {
+    const clientWalletAddress = "GCLIENT00000000000000000000000000000000000000000";
+    const providerWalletAddress = "GPROV0000000000000000000000000000000000000000";
+    const providerProfileId = await seedProviderProfile(result, { walletAddress: providerWalletAddress });
+    const bookingId = await seedBooking(result, { providerProfileId, clientWalletAddress });
+
+    const now = Math.floor(Date.now() / 1000);
+    await recordEscrowEventForBothParties(result.db, bookingId, clientWalletAddress, providerWalletAddress, "lock", now - 200);
+    await recordEscrowEventForBothParties(result.db, bookingId, clientWalletAddress, providerWalletAddress, "dispute", now - 100);
+    await recordEscrowEventForBothParties(result.db, bookingId, clientWalletAddress, providerWalletAddress, "resolve", now);
+
+    const app = createApp(result.db);
+    const response = await app.request("/me/events", { headers: await authHeader(clientWalletAddress) });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { events: Array<{ id: string; bookingId: string; type: string; createdAt: number }> };
+    assert.equal(body.events.length, 3);
+    const [first, second, third] = body.events;
+    assert.equal(first!.type, "resolve");
+    assert.equal(first!.bookingId, bookingId);
+    assert.equal(second!.type, "dispute");
+    assert.equal(third!.type, "lock");
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("GET /me/events: a wallet that is not a party to a booking does not see its events", async () => {
+  const result = openTestDatabase();
+  try {
+    const clientWalletAddress = "GCLIENT00000000000000000000000000000000000000000";
+    const providerWalletAddress = "GPROV0000000000000000000000000000000000000000";
+    const strangerWalletAddress = "GSTRNG0000000000000000000000000000000000000000";
+    const providerProfileId = await seedProviderProfile(result, { walletAddress: providerWalletAddress });
+    const bookingId = await seedBooking(result, { providerProfileId, clientWalletAddress });
+
+    const now = Math.floor(Date.now() / 1000);
+    await recordEscrowEventForBothParties(result.db, bookingId, clientWalletAddress, providerWalletAddress, "lock", now);
+
+    // A stranger to this booking gets no events for it.
+    const app = createApp(result.db);
+    const response = await app.request("/me/events", { headers: await authHeader(strangerWalletAddress) });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { events: Array<{ bookingId: string }> };
+    assert.equal(body.events.length, 0);
   } finally {
     closeDatabase(result);
   }

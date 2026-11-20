@@ -262,6 +262,16 @@ export const bookings = sqliteTable("bookings", {
   pendingDisputeReason: text("pending_dispute_reason", { enum: DISPUTE_REASONS }),
   pendingDisputeOpenerWallet: text("pending_dispute_opener_wallet"),
   pendingDisputeOpenerRole: text("pending_dispute_opener_role", { enum: ["client", "provider"] }),
+  /** Issue #22: the note the dispute opener attached to the pending dispute
+   * (free text, may be empty). Stored here at build time so
+   * `submitSignedTransaction` can write it into `escrow_dispute_openings`
+   * once a matching signed transaction is actually relayed. */
+  pendingDisputeNote: text("pending_dispute_note"),
+  /** Issue #22: the SHA-256 hex evidence hash the dispute opener attached
+   * (64 lowercase hex characters, or null). Stored here at build time the
+   * same way, and written to `escrow_dispute_openings` at submit time. The
+   * document itself is never stored -- only this hash is. */
+  pendingDisputeEvidenceHash: text("pending_dispute_evidence_hash"),
   /** The unsigned resolve-dispute transaction's own hash -- also recorded on
    * `escrow_dispute_resolutions.tx_hash` (Design Notes: "Why the resolution
    * decision is recorded with its txHash"), duplicated here purely so
@@ -591,9 +601,42 @@ export const escrowDisputeOpenings = sqliteTable("escrow_dispute_openings", {
   suggestedOutcome: text("suggested_outcome", { enum: DISPUTE_OUTCOMES }),
   /** The unsigned start-dispute transaction's own hash. */
   txHash: text("tx_hash").notNull(),
+  /** Story 3.6 amendment (Issue #22): a free-text note the dispute opener
+   * attaches to the dispute, so a client can point at a document without
+   * the file itself ever being stored. `null` when none was given. */
+  note: text("note"),
+  /** Story 3.6 amendment (Issue #22): a SHA-256 hex string (64 lowercase
+   * hex characters) the opener attests to, hashing a document they can
+   * point at. The file itself is never stored -- only this hash is.
+   * `null` when none was given. */
+  evidenceHash: text("evidence_hash"),
   /** UTC epoch seconds (review round: was epoch milliseconds -- brought in
    * line with every other booking-related time column, and with
    * `cancelDeadline`, which `suggestedOutcome`'s own client-cancel branch
    * compares it against). */
   openedAt: integer("opened_at").notNull(),
+});
+
+/**
+ * Issue #31: one row per party (client or provider) per booking-level event
+ * (lock, release, dispute, resolve). Every such action appends an event for
+ * each party to the booking, so both sides have an in-app list of what
+ * happened on a booking they are part of, newest first, linking to the
+ * booking. A row is scoped to one wallet -- one party never sees the other
+ * party's events for a booking they are not in (rows are keyed by
+ * `(booking_id, wallet_address)` plus the event's own order, so a party
+ * only ever reads rows for their own wallet on bookings they belong to).
+ */
+export const escrowEvents = sqliteTable("escrow_events", {
+  id: text("id").primaryKey(),
+  bookingId: text("booking_id")
+    .notNull()
+    .references(() => bookings.id),
+  /** Which party this event row is visible to -- the client's wallet or the
+   * provider's wallet on this booking. */
+  walletAddress: text("wallet_address").notNull(),
+  /** `lock` | `release` | `dispute` | `resolve`. */
+  type: text("type", { enum: ["lock", "release", "dispute", "resolve"] }).notNull(),
+  /** UTC epoch seconds -- the event's own wall-clock when it was recorded. */
+  createdAt: integer("created_at").notNull(),
 });

@@ -91,6 +91,7 @@ import {
   completeAppointment,
   fundDeposit,
   getBookingForClient,
+  getBookingForClientOrProvider,
   getBookingView,
   holdSlot,
   listBookingsForClient,
@@ -114,6 +115,9 @@ import type { SubmitPaymentDeps } from "./payments/stellar.js";
 import { config } from "./config.js";
 import { DISPUTE_OUTCOMES, type DisputeOutcome, type DisputeReason } from "./db/schema.js";
 import { getBookingById } from "./db/bookings.js";
+import { getProviderProfileById } from "./db/providerProfiles.js";
+import { getSlotById } from "./db/availabilitySlots.js";
+import { listEscrowEventsForParties } from "./db/escrowEvents.js";
 import {
   AmountOutOfRangeError,
   AnchorAuthError,
@@ -884,6 +888,72 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     }
   });
 
+/** Issue #26: an ICS calendar file for a locked booking. Only the booking's
+ * own client or provider may download it, and only once the booking is
+ * locked (a hold that is not yet locked does not offer the file). The file
+ * carries the start, the duration, the shop name and the booking URL -- and
+ * nothing from the escrow (no deposit transaction, no wallet secret). */
+function escapeIcsText(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
+}
+
+function formatIcsTime(epochSeconds: number): string {
+  const d = new Date(epochSeconds * 1000);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
+}
+
+app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
+  const bookingId = c.req.param("id");
+  if (!bookingId) {
+    return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+  }
+  try {
+    const { booking } = await getBookingForClientOrProvider(db, bookingId, c.get("walletAddress"));
+    if (booking.escrowState !== "locked") {
+      return c.json({ code: "BOOKING_STATE", message: "An ICS download is only offered for a locked booking." }, 409);
+    }
+    const profile = await getProviderProfileById(db, booking.providerProfileId);
+    if (!profile) {
+      return c.json({ code: "BOOKING_NOT_FOUND", message: "No booking was found with that id." }, 404);
+    }
+    const slot = booking.slotId ? await getSlotById(db, booking.slotId) : undefined;
+    const startsAt = slot?.startsAt ?? null;
+    if (startsAt === null) {
+      return c.json({ code: "BOOKING_STATE", message: "This booking has no appointment time on record." }, 409);
+    }
+    const endsAt = startsAt + profile.sessionLengthMinutes * 60;
+    const nowIcs = formatIcsTime(Math.floor(Date.now() / 1000));
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Pactly//Booking//EN",
+      "CALSCALE:GREGORIAN",
+      "BEGIN:VEVENT",
+      `UID:${bookingId}@pactly`,
+      `DTSTAMP:${nowIcs}`,
+      `DTSTART:${formatIcsTime(startsAt)}`,
+      `DTEND:${formatIcsTime(endsAt)}`,
+      `SUMMARY:Pactly appointment — ${escapeIcsText(profile.displayName || profile.id)}`,
+      `DESCRIPTION:Pactly booking ${escapeIcsText(bookingId)}. Deposit held in escrow by Trustless Work.`,
+      `URL:https://${config.pactlyHomeDomain}/book/${booking.providerProfileId}?slot=${startsAt}`,
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    return new Response(ics, {
+      headers: {
+        "content-type": "text/calendar; charset=utf-8",
+        "content-disposition": `attachment; filename="pactly-${bookingId}.ics"`,
+      },
+    });
+  } catch (error) {
+    if (error instanceof BookingNotFoundError) {
+      return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
+    }
+    throw error;
+  }
+});
+
   // ---------------------------------------------------------------------
   // Story 2.4: SEP-6 local-currency deposit. The client signs the anchor's
   // own challenge in their wallet; the JWT never leaves this backend.
@@ -1085,6 +1155,24 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     return c.json({ bookings: bookingsList });
   });
 
+  /** Issue #31: the signed-in wallet's own in-app event list -- lock,
+   * release, dispute and resolve events for every booking they are a party
+   * to, newest first, linking to each booking. A wallet never sees events
+   * for a booking they are not in. */
+  app.get("/me/events", requirePactlyAuth, async (c) => {
+    const walletAddress = c.get("walletAddress");
+    const clientBookings = await listBookingsForClient(db, walletAddress);
+    let providerBookings: Array<{ id: string }> = [];
+    try {
+      providerBookings = await listBookingsForProvider(db, walletAddress);
+    } catch (error) {
+      if (!(error instanceof NotAProviderError)) throw error;
+    }
+    const bookingIds = [...new Set([...clientBookings, ...providerBookings].map((booking) => booking.id))];
+    const events = await listEscrowEventsForParties(db, walletAddress, bookingIds);
+    return c.json({ events });
+  });
+
   /** The provider panel's "Bookings" view: every booking against the
    * caller's own provider profile, ordered by appointment date. A wallet
    * with no provider profile gets the same `404 NOT_A_PROVIDER` every other
@@ -1207,8 +1295,22 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     if (!reason) {
       return c.json({ code: "invalid_request", message: "reason is required." }, 400);
     }
+    // Issue #22: the dispute opener may attach a free-text note and a
+    // SHA-256 hex evidence hash (64 lowercase hex characters) to the
+    // dispute -- the file itself is never stored, only the hash.
+    const note = typeof body?.note === "string" ? body.note : "";
+    const evidenceHash = typeof body?.evidenceHash === "string" ? body.evidenceHash : "";
     try {
-      const result = await openDispute(db, bookingId, c.get("walletAddress"), reason as DisputeReason, escrowAdapter);
+      const result = await openDispute(
+        db,
+        bookingId,
+        c.get("walletAddress"),
+        reason as DisputeReason,
+        escrowAdapter,
+        undefined,
+        note,
+        evidenceHash,
+      );
       return c.json(result);
     } catch (error) {
       if (error instanceof BookingNotFoundError) {

@@ -266,6 +266,52 @@ test("POST /bookings/:id/dispute: 409 once a dispute is already open", async () 
 });
 
 // ---------------------------------------------------------------------------
+// Issue #22: dispute note and evidence hash
+// ---------------------------------------------------------------------------
+
+test("POST /bookings/:id/dispute: 200 stores and returns the note and evidence hash", async () => {
+  const result = openTestDatabase();
+  try {
+    const seed = await seedLockedBooking(result);
+    const adapter = fakeEscrowAdapter({ startDispute: async () => ({ unsignedXdr: "x", txHash: "dispute-tx-hash" }) });
+    const app = createApp(result.db, { escrowAdapter: adapter });
+    const response = await app.request(`/bookings/${seed.bookingId}/dispute`, {
+      method: "POST",
+      headers: await authHeader(seed.clientWalletAddress),
+      body: JSON.stringify({ reason: "provider-no-show", note: "See the attached photo.", evidenceHash: "aa".repeat(32) }),
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      txHash: string;
+      reason: string;
+      note?: string;
+      evidenceHash?: string;
+    };
+    assert.equal(body.note, "See the attached photo.");
+    assert.equal(body.evidenceHash, "aa".repeat(32));
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("POST /bookings/:id/dispute: 400 for an evidence hash that is not 64 hex characters", async () => {
+  const result = openTestDatabase();
+  try {
+    const seed = await seedLockedBooking(result);
+    const app = createApp(result.db, { escrowAdapter: fakeEscrowAdapter() });
+    const response = await app.request(`/bookings/${seed.bookingId}/dispute`, {
+      method: "POST",
+      headers: await authHeader(seed.clientWalletAddress),
+      body: JSON.stringify({ reason: "disagreement", evidenceHash: "not-a-hash" }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal(((await response.json()) as { code: string }).code, "INVALID_REASON");
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /admin/bookings/:id/resolve and GET /admin/disputes
 // ---------------------------------------------------------------------------
 

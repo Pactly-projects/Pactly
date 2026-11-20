@@ -75,8 +75,9 @@ import {
   type EscrowActionKind,
 } from "../db/bookings.js";
 import { getSlotById, getSlotByProviderAndStart, listOpenSlotsInRange } from "../db/availabilitySlots.js";
-import { recordEscrowDisputeResolution } from "../db/escrowDisputeResolutions.js";
+import { getEscrowDisputeResolution, recordEscrowDisputeResolution } from "../db/escrowDisputeResolutions.js";
 import { getEscrowDisputeOpeningsForBookings, recordEscrowDisputeOpening } from "../db/escrowDisputeOpenings.js";
+import { recordEscrowEventForBothParties } from "../db/escrowEvents.js";
 import { getProviderProfileById, getProviderProfileByWallet } from "../db/providerProfiles.js";
 import { computeDepositAmount, NotAProviderError, ProviderNotFoundError } from "./profile.js";
 import { resolveUsdcAsset, type ResolveUsdcAssetOptions, type UsdcAsset } from "../anchor/usdc.js";
@@ -608,6 +609,17 @@ export async function lockDeposit(
     }
     throw error;
   }
+  // Issue #31: a fresh deploy persisted means the lock action is underway --
+  // record a "lock" event for both parties so each side sees it on their
+  // own event list.
+  await recordEscrowEventForBothParties(
+    db,
+    booking.id,
+    booking.clientWalletAddress,
+    providerAddress,
+    "lock",
+    now,
+  );
 
   return { deployed: false, contractId: deployResult.contractId, unsignedXdr: deployResult.unsignedXdr, txHash: deployResult.txHash };
 }
@@ -694,6 +706,13 @@ export async function resolveBookingDispute(
   adapter: EscrowAdapter = defaultEscrowAdapter,
 ): Promise<ResolveBookingDisputeResult> {
   const booking = await requireBooking(db, bookingId);
+  // Issue #33: a second resolve returns the stored outcome and does not
+  // call the escrow again. A booking whose deposit was already allocated
+  // by an earlier resolution is not re-resolved.
+  const existing = await getEscrowDisputeResolution(db, bookingId);
+  if (existing) {
+    return { unsignedXdr: "", txHash: existing.txHash, outcome: existing.outcome };
+  }
   if (booking.escrowState !== "locked" || !booking.escrowContractId) {
     throw new BookingEscrowStateError(
       `Booking "${bookingId}" must be "locked" with a persisted escrow contractId to resolve a dispute ` +
@@ -734,6 +753,8 @@ export async function resolveBookingDispute(
   // so `submitSignedTransaction`'s hash-matching rule can check every
   // Story 3.6 action's hash from one row, without a second query.
   await setEscrowActionTxHash(db, bookingId, "resolve", result.txHash);
+  // Issue #31: record a "resolve" event for both parties.
+  await recordEscrowEventForBothParties(db, booking.id, booking.clientWalletAddress, providerAddress, "resolve", Math.floor(Date.now() / 1000));
 
   return { ...result, outcome };
 }
@@ -869,6 +890,15 @@ export async function releaseDeposit(
   }
   const result = await adapter.release({ contractId: booking.escrowContractId, providerAddress: providerWalletAddress });
   await setEscrowActionTxHash(db, bookingId, "release", result.txHash);
+  // Issue #31: record a "release" event for both parties.
+  await recordEscrowEventForBothParties(
+    db,
+    booking.id,
+    booking.clientWalletAddress,
+    providerWalletAddress,
+    "release",
+    Math.floor(Date.now() / 1000),
+  );
   return result;
 }
 
@@ -918,6 +948,10 @@ function computeSuggestedOutcome(reason: DisputeReason, booking: BookingRow, now
 export interface OpenDisputeResult extends UnsignedTransaction {
   reason: DisputeReason;
   suggestedOutcome?: DisputeOutcome;
+  /** Issue #22: the note the opener attached (free text, may be empty). */
+  note?: string;
+  /** Issue #22: the SHA-256 hex evidence hash the opener attached (or undefined). */
+  evidenceHash?: string;
 }
 
 /**
@@ -950,10 +984,17 @@ export async function openDispute(
   reason: DisputeReason,
   adapter: EscrowAdapter = defaultEscrowAdapter,
   now: number = Math.floor(Date.now() / 1000),
+  /** Issue #22: a free-text note the opener attaches to the dispute (may be empty). */
+  note: string = "",
+  /** Issue #22: a SHA-256 hex evidence hash the opener attests to (64 lowercase hex chars, or ""). */
+  evidenceHash: string = "",
 ): Promise<OpenDisputeResult> {
   const { booking, role } = await getBookingForClientOrProvider(db, bookingId, walletAddress);
   if (!isDisputeReasonAllowedForRole(reason, role)) {
     throw new InvalidDisputeReasonError();
+  }
+  if (evidenceHash !== "" && !/^[0-9a-f]{64}$/.test(evidenceHash)) {
+    throw new InvalidDisputeReasonError("The evidence hash must be 64 lowercase hex characters.");
   }
   if (booking.escrowState !== "locked" || !booking.escrowContractId) {
     throw new BookingEscrowStateError(
@@ -974,8 +1015,11 @@ export async function openDispute(
   }
   const result = await adapter.startDispute({ contractId: booking.escrowContractId, signerAddress: walletAddress, reason });
   const suggestedOutcome = computeSuggestedOutcome(reason, booking, now);
-  await setPendingDispute(db, bookingId, { txHash: result.txHash, reason, openerWallet: walletAddress, openerRole: role });
-  return { ...result, reason, suggestedOutcome };
+  const providerAddress = await requireProviderAddress(db, booking);
+  await setPendingDispute(db, bookingId, { txHash: result.txHash, reason, openerWallet: walletAddress, openerRole: role, note: note || undefined, evidenceHash: evidenceHash || undefined });
+  // Issue #31: record a "dispute" event for both parties.
+  await recordEscrowEventForBothParties(db, booking.id, booking.clientWalletAddress, providerAddress, "dispute", now);
+  return { ...result, reason, suggestedOutcome, note: note || undefined, evidenceHash: evidenceHash || undefined };
 }
 
 export interface AdminDisputeListItem {
