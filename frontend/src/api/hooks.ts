@@ -145,6 +145,7 @@ export interface ProviderRulesInput {
   priceAmount: string;
   depositRateBps: number;
   cancellationWindowHours: number;
+  bufferMinutes: number;
 }
 
 export function useUpdateProviderRules(session: Session | undefined) {

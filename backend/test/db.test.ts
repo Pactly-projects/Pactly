@@ -301,6 +301,7 @@ test("runMigrations adds display_name/title/location to a provider_profiles tabl
       priceAmount: "20000000",
       depositRateBps: 3000,
       cancellationWindowHours: 48,
+      bufferMinutes: 0,
     });
     const updated = await getProviderProfileById(db, providerProfileId);
     assert.equal(updated?.priceAmount, "20000000");

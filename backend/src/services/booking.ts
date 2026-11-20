@@ -74,7 +74,12 @@ import {
   type BookingRow,
   type EscrowActionKind,
 } from "../db/bookings.js";
-import { getSlotById, getSlotByProviderAndStart, listOpenSlotsInRange } from "../db/availabilitySlots.js";
+import { getSlotById, getSlotByProviderAndStart } from "../db/availabilitySlots.js";
+import {
+  isSlotInsideBufferAfterLocked,
+  listLockedBookingStarts,
+  listOfferedSlotsInRange,
+} from "./availability.js";
 import { recordEscrowDisputeResolution } from "../db/escrowDisputeResolutions.js";
 import { getEscrowDisputeOpeningsForBookings, recordEscrowDisputeOpening } from "../db/escrowDisputeOpenings.js";
 import { getProviderProfileById, getProviderProfileByWallet } from "../db/providerProfiles.js";
@@ -319,6 +324,23 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
     throw new SlotUnavailableError();
   }
 
+  // A slot inside the post-lock buffer is not offered -- refuse the hold the
+  // same way as an unknown/past slot so a stale deep-link cannot claim it.
+  if (profile.bufferMinutes > 0) {
+    const lockedStarts = await listLockedBookingStarts(db, profile.id);
+    const blocked = lockedStarts.some((lockedStartsAt) =>
+      isSlotInsideBufferAfterLocked(
+        input.slotStartsAt,
+        lockedStartsAt,
+        profile.sessionLengthMinutes,
+        profile.bufferMinutes,
+      ),
+    );
+    if (blocked) {
+      throw new SlotUnavailableError();
+    }
+  }
+
   const provider: BookingProviderSummary = { id: profile.id, displayName: profile.displayName, title: profile.title };
 
   // Review follow-up: the same wallet asking to hold a slot it already
@@ -372,7 +394,15 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
 
   if (!inserted) {
     const { start, end } = dayRange(input.slotStartsAt, input.tzOffsetMinutes);
-    const sameDaySlots = await listOpenSlotsInRange(db, profile.id, start, end, now);
+    const sameDaySlots = await listOfferedSlotsInRange(
+      db,
+      profile.id,
+      start,
+      end,
+      profile.sessionLengthMinutes,
+      profile.bufferMinutes,
+      now,
+    );
     throw new SlotTakenError(sameDaySlots.filter((startsAt) => startsAt !== input.slotStartsAt));
   }
 

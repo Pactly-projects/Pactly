@@ -47,6 +47,7 @@ const STATEMENTS: readonly string[] = [
     price_amount TEXT NOT NULL,
     deposit_rate_bps INTEGER NOT NULL,
     cancellation_window_hours INTEGER NOT NULL,
+    buffer_minutes INTEGER NOT NULL DEFAULT 0,
     is_approved INTEGER NOT NULL DEFAULT 0,
     verified_session_count INTEGER NOT NULL DEFAULT 0,
     provider_cancellation_count INTEGER NOT NULL DEFAULT 0,
@@ -326,5 +327,10 @@ export function runMigrations(sqlite: Database): void {
   }
   if (!hasColumn(sqlite, "bookings", "anchor_trustline_tx_hash")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN anchor_trustline_tx_hash TEXT`);
+  }
+  // Appointment buffer: minutes kept free after a locked booking before
+  // another slot is offered. Default 0 keeps adjacent slots (existing rows).
+  if (!hasColumn(sqlite, "provider_profiles", "buffer_minutes")) {
+    sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN buffer_minutes INTEGER NOT NULL DEFAULT 0`);
   }
 }

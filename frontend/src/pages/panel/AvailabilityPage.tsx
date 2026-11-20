@@ -115,6 +115,7 @@ export function AvailabilityPage() {
   const [priceEdited, setPriceEdited] = useState(false);
   const [depositRatePercentInput, setDepositRatePercentInput] = useState("");
   const [cancellationWindowInput, setCancellationWindowInput] = useState("");
+  const [bufferMinutesInput, setBufferMinutesInput] = useState("");
   const [selectedSlots, setSelectedSlots] = useState<Set<number>>(new Set());
 
   // Seeds local form state only the first time a profile loads, or when it
@@ -132,6 +133,7 @@ export function AvailabilityPage() {
       setPriceEdited(false);
       setDepositRatePercentInput(String(profileQuery.data.depositRateBps / 100));
       setCancellationWindowInput(String(profileQuery.data.cancellationWindowHours));
+      setBufferMinutesInput(String(profileQuery.data.bufferMinutes));
       setSelectedSlots(new Set(profileQuery.data.slots));
     }
   }, [profileQuery.data]);
@@ -152,6 +154,7 @@ export function AvailabilityPage() {
   const depositRatePercent = Number(depositRatePercentInput);
   const depositRateBps = Number.isFinite(depositRatePercent) ? Math.round(depositRatePercent * 100) : Number.NaN;
   const cancellationWindowHours = Number(cancellationWindowInput);
+  const bufferMinutes = Number(bufferMinutesInput);
   const deposit = previewDeposit(priceSmallestUnit, depositRateBps);
 
   const rulesErrorDetails =
@@ -169,6 +172,7 @@ export function AvailabilityPage() {
         priceAmount: priceSmallestUnit,
         depositRateBps,
         cancellationWindowHours,
+        bufferMinutes,
       });
       // Only the rules form's own fields -- an unsaved slot selection in
       // the availability grid below must survive this save untouched. The
@@ -177,6 +181,7 @@ export function AvailabilityPage() {
       setPriceInput("");
       setDepositRatePercentInput(String(saved.depositRateBps / 100));
       setCancellationWindowInput(String(saved.cancellationWindowHours));
+      setBufferMinutesInput(String(saved.bufferMinutes));
     } catch {
       // Surfaced through `updateRules.error`/`rulesErrorDetails`/
       // `rulesGenericError` below -- nothing further to do here.
@@ -332,6 +337,18 @@ export function AvailabilityPage() {
             {rulesErrorDetails?.cancellationWindowHours && (
               <span className="field__error">{rulesErrorDetails.cancellationWindowHours}</span>
             )}
+          </div>
+          <div className="field">
+            <label htmlFor="bufferMinutes">Buffer between appointments (minutes)</label>
+            <input
+              id="bufferMinutes"
+              inputMode="numeric"
+              min={0}
+              max={120}
+              value={bufferMinutesInput}
+              onChange={(event) => setBufferMinutesInput(event.target.value)}
+            />
+            {rulesErrorDetails?.bufferMinutes && <span className="field__error">{rulesErrorDetails.bufferMinutes}</span>}
           </div>
 
           <p className="tabular-nums">

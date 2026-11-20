@@ -32,6 +32,7 @@ export interface ProviderProfile {
   deposit: Money;
   depositRateBps: number;
   cancellationWindowHours: number;
+  bufferMinutes: number;
   verifiedSessionCount: number;
   isApproved: boolean;
   /** UTC epoch seconds, ascending. */
