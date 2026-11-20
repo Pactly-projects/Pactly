@@ -437,6 +437,22 @@ export class XdrMismatchError extends Error {
   }
 }
 
+/**
+ * Issue #48: Thrown when a client attempts to lock a deposit but the
+ * anchor transfer credited less than the required amount. The hold remains,
+ * and the client sees both amounts so they can either top up or abandon.
+ */
+export class ShortDepositError extends Error {
+  constructor(
+    public readonly receivedAmount: string,
+    public readonly requiredAmount: string,
+    message = "The anchor transfer did not credit enough to cover this booking's deposit.",
+  ) {
+    super(message);
+    this.name = "ShortDepositError";
+  }
+}
+
 /** Story 3.6 (review round): a fresh build of an action was requested while
  * an earlier signed transaction for that *same* action kind on this booking
  * has already been relayed and the reconciler's own chain-derived lifecycle
@@ -562,6 +578,26 @@ export async function lockDeposit(
     throw new BookingEscrowStateError(`Booking "${bookingId}" already has escrow_state "${booking.escrowState}"; lockDeposit cannot run again`);
   }
   requireHoldNotExpired(booking, now);
+
+  // Issue #48: Validate that the anchor transfer (if one exists) credited
+  // enough USDC to cover the deposit. A missing transfer (null amountIn)
+  // is refused, as is a short amount. The check uses the booking's asset
+  // (tokenAddress), not a hardcoded "USDC".
+  if (booking.anchorDepositId) {
+    const receivedAmount = booking.anchorDepositAmountIn;
+    const requiredAmount = booking.depositAmount;
+    
+    if (!receivedAmount) {
+      throw new ShortDepositError("0", requiredAmount, "No anchor transfer was found for this booking.");
+    }
+    
+    const received = BigInt(receivedAmount);
+    const required = BigInt(requiredAmount);
+    
+    if (received < required) {
+      throw new ShortDepositError(receivedAmount, requiredAmount);
+    }
+  }
 
   if (booking.escrowContractId !== null) {
     if (booking.deploySubmittedAt !== null) {
