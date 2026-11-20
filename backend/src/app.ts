@@ -114,6 +114,8 @@ import type { SubmitPaymentDeps } from "./payments/stellar.js";
 import { config } from "./config.js";
 import { DISPUTE_OUTCOMES, type DisputeOutcome, type DisputeReason } from "./db/schema.js";
 import { getBookingById } from "./db/bookings.js";
+import { getProviderProfileById } from "./db/providerProfiles.js";
+import { getSlotById } from "./db/availabilitySlots.js";
 import {
   AmountOutOfRangeError,
   AnchorAuthError,
@@ -532,6 +534,48 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
   app.get("/categories", async (c) => {
     const categories = await listCategoriesWithProviderCounts(db);
     return c.json({ categories });
+  });
+
+  /**
+   * Public, shareable proof for a booking whose escrow contract has been
+   * deployed. Shows the shop, the appointment time, the deposit amount, the
+   * contract id, and the explorer/viewer links' raw inputs -- never the
+   * client's identity, any booking note, or another booking. A booking with
+   * no deployed contract (so no proof to show) is the same 404 as an
+   * unknown id.
+   */
+  app.get("/proof/:id", async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "NOT_FOUND", message: "No proof was found for this booking." }, 404);
+    }
+    const booking = await getBookingById(db, bookingId);
+    const hasDeployedContract = Boolean(
+      booking?.escrowContractId && (booking.escrowState !== null || booking.deploySubmittedAt !== null),
+    );
+    if (!booking || !hasDeployedContract) {
+      return c.json({ code: "NOT_FOUND", message: "No proof was found for this booking." }, 404);
+    }
+
+    const [profile, slot] = await Promise.all([
+      getProviderProfileById(db, booking.providerProfileId),
+      booking.slotId ? getSlotById(db, booking.slotId) : Promise.resolve(undefined),
+    ]);
+
+    const status = booking.escrowState === "released" ? "released" : booking.escrowState === "refunded" ? "cancelled" : "locked";
+
+    return c.json({
+      id: booking.id,
+      status,
+      shop: {
+        displayName: profile?.displayName ?? "",
+        title: profile?.title ?? "",
+        location: profile?.location ?? "",
+      },
+      slotStartsAt: slot?.startsAt ?? null,
+      deposit: { amount: booking.depositAmount, asset: "USDC" },
+      contractId: booking.escrowContractId,
+    });
   });
 
   /** Story 3.2/3.3: the Discover list. Approved providers only (enforced

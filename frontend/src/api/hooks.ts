@@ -18,6 +18,7 @@ import type {
   LockResponse,
   MyBookingsResponse,
   OpenDisputeResponse,
+  ProofResponse,
   ProviderBookingsResponse,
   ProviderProfile,
   ProvidersResponse,
@@ -255,6 +256,16 @@ export async function fundDepositWithRetry(
   }
   // Unreachable -- the loop above always returns or throws.
   throw new Error("fundDepositWithRetry: exhausted attempts without returning or throwing");
+}
+
+/** Public shareable proof for a deployed booking -- no auth. */
+export function useProof(id: string | undefined) {
+  return useQuery({
+    queryKey: ["proof", id],
+    queryFn: () => apiGet<ProofResponse>(`/proof/${id}`),
+    enabled: Boolean(id),
+    retry: false,
+  });
 }
 
 /** `GET /bookings/:id`, polled while the booking hasn't reached a terminal

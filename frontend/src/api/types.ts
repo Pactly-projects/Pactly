@@ -429,3 +429,22 @@ export interface AdminApplicationsResponse {
 }
 
 export type ProviderApplicationOutcome = "approve" | "reject";
+
+// ---------------------------------------------------------------------------
+// Public booking proof (shareable, no sign-in)
+// ---------------------------------------------------------------------------
+
+export interface ProofShop {
+  displayName: string;
+  title: string;
+  location: string;
+}
+
+export interface ProofResponse {
+  id: string;
+  status: "locked" | "released" | "cancelled";
+  shop: ProofShop;
+  slotStartsAt: number | null;
+  deposit: Money;
+  contractId: string;
+}

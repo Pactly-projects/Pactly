@@ -806,7 +806,12 @@ export function BookingPage() {
               <Seal />
               <p className="seal-wrap__title">You're set.</p>
               <p className="seal-wrap__subtitle">Your deposit is held in escrow by Trustless Work.</p>
-              <Link to="/discover" className="button-ghost" style={{ marginTop: "var(--space-4)", textDecoration: "none" }}>
+              {hold?.bookingId && (
+                <Link to={`/proof/${hold.bookingId}`} className="button-ghost" style={{ marginTop: "var(--space-3)", textDecoration: "none" }}>
+                  Share proof
+                </Link>
+              )}
+              <Link to="/discover" className="button-ghost" style={{ marginTop: "var(--space-2)", textDecoration: "none" }}>
                 Back to Discover
               </Link>
             </div>
