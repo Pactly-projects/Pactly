@@ -312,6 +312,105 @@ test("releaseDeposit: the client gets 404", async () => {
   }
 });
 
+test("releaseDeposit: retries a signed-but-unapplied release on the same contract id, then refuses once the chain records it released", async () => {
+  const result = openTestDatabase();
+  try {
+    const seed = await seedLockedBooking(result, { lifecycleAction: "approved" });
+    const first = buildFakeTransactionXdr();
+    const second = buildFakeTransactionXdr();
+    const envelopes = [first, second];
+    let releaseCalls = 0;
+    let submitCalls = 0;
+    const adapter: EscrowAdapter = {
+      ...unreachableEscrowAdapter(),
+      release: async (input) => {
+        assert.equal(input.contractId, seed.contractId, "every attempt must reuse the same persisted contract id");
+        const envelope = envelopes[releaseCalls];
+        assert.ok(envelope, "no more than the expected number of release builds");
+        releaseCalls += 1;
+        return { unsignedXdr: envelope.xdr, txHash: envelope.hash };
+      },
+      submit: async () => {
+        submitCalls += 1;
+        return { txHash: `relayed-${submitCalls}` };
+      },
+    };
+
+    // First attempt: built, signed and relayed, but the chain has not
+    // applied it yet -- the booking is left with a pending release.
+    const firstBuild = await releaseDeposit(result.db, seed.bookingId, seed.providerWalletAddress, adapter);
+    assert.equal(firstBuild.status, "ready");
+    assert.equal(firstBuild.contractId, seed.contractId);
+    await submitSignedTransaction(result.db, seed.bookingId, first.xdr, "provider", adapter);
+    assert.equal(submitCalls, 1);
+    assert.notEqual((await getBookingById(result.db, seed.bookingId))?.escrowReleaseSubmittedAt, null);
+
+    // Retry: a fresh release XDR, but against the same contract id.
+    const retryBuild = await releaseDeposit(result.db, seed.bookingId, seed.providerWalletAddress, adapter);
+    assert.equal(retryBuild.status, "ready");
+    assert.equal(retryBuild.contractId, seed.contractId);
+    assert.equal(releaseCalls, 2);
+    await submitSignedTransaction(result.db, seed.bookingId, second.xdr, "provider", adapter);
+    assert.equal(submitCalls, 2);
+
+    // The chain now shows the release applied. A second call must not
+    // build or submit anything again, and must mark the booking released.
+    await insertEscrowProcessedEventIfNew(result.db, {
+      bookingId: seed.bookingId,
+      contractId: seed.contractId,
+      lifecycleAction: "released",
+      amount: "0",
+      ledgerSeq: "2",
+      isAnomaly: false,
+      processedAt: Date.now(),
+    });
+    let afterSuccessReleaseCalls = 0;
+    const afterSuccessAdapter: EscrowAdapter = {
+      ...unreachableEscrowAdapter(),
+      release: async () => {
+        afterSuccessReleaseCalls += 1;
+        throw new Error("release must not be built once the chain shows it applied");
+      },
+      submit: async () => {
+        throw new Error("nothing must be submitted once the chain shows the release applied");
+      },
+    };
+    const applied = await releaseDeposit(result.db, seed.bookingId, seed.providerWalletAddress, afterSuccessAdapter);
+    assert.equal(applied.status, "applied");
+    assert.equal(applied.contractId, seed.contractId);
+    assert.equal(afterSuccessReleaseCalls, 0);
+    assert.equal((await getBookingById(result.db, seed.bookingId))?.escrowState, "released");
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("releaseDeposit: a non-party cannot retry a pending release (404, never reaching the adapter)", async () => {
+  const result = openTestDatabase();
+  try {
+    const seed = await seedLockedBooking(result, { lifecycleAction: "approved" });
+    const first = buildFakeTransactionXdr();
+    const adapter: EscrowAdapter = {
+      ...unreachableEscrowAdapter(),
+      release: async () => ({ unsignedXdr: first.xdr, txHash: first.hash }),
+      submit: async () => ({ txHash: "relayed" }),
+    };
+    await releaseDeposit(result.db, seed.bookingId, seed.providerWalletAddress, adapter);
+    await submitSignedTransaction(result.db, seed.bookingId, first.xdr, "provider", adapter);
+
+    await assert.rejects(
+      () => releaseDeposit(result.db, seed.bookingId, seed.clientWalletAddress, unreachableEscrowAdapter()),
+      BookingNotFoundError,
+    );
+    await assert.rejects(
+      () => releaseDeposit(result.db, seed.bookingId, Keypair.random().publicKey(), unreachableEscrowAdapter()),
+      BookingNotFoundError,
+    );
+  } finally {
+    closeDatabase(result);
+  }
+});
+
 test("releaseDeposit: refuses from 'funded'/'completed'/'disputed' -- only 'approved' releases", async () => {
   const result = openTestDatabase();
   try {

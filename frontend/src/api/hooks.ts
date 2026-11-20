@@ -22,6 +22,7 @@ import type {
   ProviderProfile,
   ProvidersResponse,
   QuoteResponse,
+  ReleaseDepositResponse,
   ResolveDisputeResponse,
   SubmitResponse,
   SuggestResponse,
@@ -325,8 +326,8 @@ export function approveAppointment(bookingId: string, session: Session): Promise
   return apiPost<ActionResponse>(`/bookings/${bookingId}/approve`, {}, session.token);
 }
 
-export function releaseDeposit(bookingId: string, session: Session): Promise<ActionResponse> {
-  return apiPost<ActionResponse>(`/bookings/${bookingId}/release`, {}, session.token);
+export function releaseDeposit(bookingId: string, session: Session): Promise<ReleaseDepositResponse> {
+  return apiPost<ReleaseDepositResponse>(`/bookings/${bookingId}/release`, {}, session.token);
 }
 
 /** Builds the unsigned start-dispute XDR and, in the same response, the

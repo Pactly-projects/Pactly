@@ -192,6 +192,72 @@ test("POST /bookings/:id/release: 200 for the provider once approved; 409 before
   }
 });
 
+test("POST /bookings/:id/release: a signed-unapplied release can be retried, and reports applied without a build once the chain shows it released", async () => {
+  const result = openTestDatabase();
+  try {
+    const seed = await seedLockedBooking(result, { lifecycleAction: "approved" });
+    const first = buildFakeTransactionXdr();
+    const second = buildFakeTransactionXdr();
+    const envelopes = [first, second];
+    let releaseCalls = 0;
+    const headers = await authHeader(seed.providerWalletAddress);
+    const app = createApp(result.db, {
+      escrowAdapter: fakeEscrowAdapter({
+        release: async () => {
+          const envelope = envelopes[releaseCalls];
+          assert.ok(envelope);
+          releaseCalls += 1;
+          return { unsignedXdr: envelope.xdr, txHash: envelope.hash };
+        },
+        submit: async () => ({ txHash: "relayed" }),
+      }),
+    });
+
+    const firstBuild = await app.request(`/bookings/${seed.bookingId}/release`, { method: "POST", headers });
+    assert.equal(firstBuild.status, 200);
+    assert.equal(((await firstBuild.json()) as { status: string }).status, "ready");
+
+    const submit = await app.request(`/bookings/${seed.bookingId}/submit`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ signedXdr: first.xdr }),
+    });
+    assert.equal(submit.status, 200);
+
+    const retry = await app.request(`/bookings/${seed.bookingId}/release`, { method: "POST", headers });
+    assert.equal(retry.status, 200);
+    const retryBody = (await retry.json()) as { status: string; contractId: string };
+    assert.equal(retryBody.status, "ready");
+    assert.equal(retryBody.contractId, seed.contractId);
+    assert.equal(releaseCalls, 2);
+
+    await insertEscrowProcessedEventIfNew(result.db, {
+      bookingId: seed.bookingId,
+      contractId: seed.contractId,
+      lifecycleAction: "released",
+      amount: "0",
+      ledgerSeq: "2",
+      isAnomaly: false,
+      processedAt: Date.now(),
+    });
+    let afterSuccessReleaseCalls = 0;
+    const appliedApp = createApp(result.db, {
+      escrowAdapter: fakeEscrowAdapter({
+        release: async () => {
+          afterSuccessReleaseCalls += 1;
+          return { unsignedXdr: second.xdr, txHash: second.hash };
+        },
+      }),
+    });
+    const applied = await appliedApp.request(`/bookings/${seed.bookingId}/release`, { method: "POST", headers });
+    assert.equal(applied.status, 200);
+    assert.equal(((await applied.json()) as { status: string }).status, "applied");
+    assert.equal(afterSuccessReleaseCalls, 0);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // POST /bookings/:id/dispute
 // ---------------------------------------------------------------------------

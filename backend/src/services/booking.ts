@@ -4,13 +4,16 @@
  * and this module only composes the two -- the layering the whole backend
  * is written against (routes -> services -> db/escrow/anchor, one-way).
  *
- * What is deliberately *not* here: nothing in this file ever sets
+ * What is deliberately *not* here: nothing in this file invents an
  * `escrow_state`. That column belongs to `../escrow/trustless-work/
  * reconciler.ts` alone (AD-1/AD-3, Story 2.6's retarget of
  * `../chain/event-worker.ts`); `lockDeposit` and `fundDeposit` below only
  * ever build unsigned XDR -- the booking's `escrowState` stays `null`
  * until the reconciler processes chain-confirmed evidence that the
- * resulting signed-and-submitted transactions actually landed.
+ * resulting signed-and-submitted transactions actually landed. The one
+ * exception is `releaseDeposit`, which mirrors an *already recorded*
+ * chain-derived `"released"` transition onto `escrow_state` when that write
+ * had not landed yet -- never a transition of its own.
  *
  * `lockDeposit`/`fundDeposit`/`resolveBookingDispute` no longer call
  * `../chain/client.ts` (Story 2.6): that module is superseded, not deleted
@@ -71,6 +74,7 @@ import {
   setPendingDispute,
   updateBalanceState,
   updateEscrowContractId,
+  updateEscrowStateIfNotTerminalSync,
   type BookingRow,
   type EscrowActionKind,
 } from "../db/bookings.js";
@@ -831,27 +835,55 @@ export async function approveAppointment(
 }
 
 /**
- * "Release" (provider only, self-claim): refused (typed
- * {@link BookingEscrowStateError}) unless the reconciler's own latest
- * recorded lifecycle action is exactly `"approved"` -- per the spec's own
- * role map row ("release: provider wallet (release signer), only when the
- * latest lifecycle is approved and not disputed"). A dispute opened after
- * approval would itself become the *latest* recorded action (the
- * reconciler's own rank puts `disputed` above `approved`), so checking for
- * `"approved"` alone already excludes that case -- no separate "not
- * disputed" check is needed.
+ * "Release" (provider only, self-claim):
+ *
+ * - Once the reconciler's own chain-derived lifecycle shows the release
+ *   already applied (`"released"`, or the booking is already `released`),
+ *   this marks the booking released (when that write had not landed yet)
+ *   and returns `{ status: "applied" }` **without building or submitting
+ *   anything** -- a second click can never submit a second release against
+ *   an escrow that already paid.
+ * - Otherwise, refused (typed {@link BookingEscrowStateError}) unless the
+ *   latest recorded lifecycle action is exactly `"approved"` -- per the
+ *   spec's own role map row ("release: provider wallet (release signer),
+ *   only when the latest lifecycle is approved and not disputed"). A
+ *   dispute opened after approval would itself become the *latest*
+ *   recorded action (the reconciler's own rank puts `disputed` above
+ *   `approved`), so checking for `"approved"` alone already excludes that
+ *   case -- no separate "not disputed" check is needed.
+ *
+ * A release that was already signed and relayed (`escrowReleaseSubmittedAt`
+ * set) but has not been applied on chain is retryable: this rebuilds a
+ * release XDR against the *same* `escrowContractId`, so the retry can never
+ * point at a different escrow. Once the chain-confirmed `"released"`
+ * evidence is recorded, that retry path is refused (returns `"applied"`)
+ * and no adapter call happens at all.
  */
+export type ReleaseDepositResult =
+  | { status: "ready"; contractId: string; unsignedXdr: string; txHash: string }
+  | { status: "applied"; contractId: string };
+
 export async function releaseDeposit(
   db: Db,
   bookingId: string,
   providerWalletAddress: string,
   adapter: EscrowAdapter = defaultEscrowAdapter,
-): Promise<UnsignedTransaction> {
+): Promise<ReleaseDepositResult> {
   const booking = await getBookingForProvider(db, bookingId, providerWalletAddress);
-  if (booking.escrowState !== "locked" || !booking.escrowContractId) {
+  if (!booking.escrowContractId) {
     throw new BookingEscrowStateError(
       `Booking "${bookingId}" must be locked with a persisted escrow contractId to release it (escrowState is "${booking.escrowState}")`,
     );
+  }
+
+  // Already released, by the booking's own state or by the reconciler's
+  // chain-derived lifecycle. Mirror a lifecycle-confirmed release onto
+  // `escrow_state` when that write had not landed yet, then return without
+  // touching the adapter -- the deposit has already moved. This check sits
+  // before the `locked`/`approved` guards on purpose: a booking whose chain
+  // evidence is ahead of its stored state must never look releasable again.
+  if (booking.escrowState === "released") {
+    return { status: "applied", contractId: booking.escrowContractId };
   }
   const lifecycle = await getEscrowLifecycle(db, bookingId);
   if (lifecycle?.contractId !== booking.escrowContractId) {
@@ -859,17 +891,32 @@ export async function releaseDeposit(
       `Booking "${bookingId}" has no chain-confirmed evidence yet for its current escrow contractId`,
     );
   }
-  if (booking.escrowReleaseSubmittedAt !== null && lifecycle.action === "approved") {
-    throw new BookingActionPendingError();
+  if (lifecycle.action === "released") {
+    // `updateEscrowStateIfNotTerminalSync` is the reconciler's own writer:
+    // this mirrors evidence the reconciler has already recorded, never
+    // invents a chain transition (AD-1).
+    updateEscrowStateIfNotTerminalSync(db, bookingId, "released");
+    return { status: "applied", contractId: booking.escrowContractId };
+  }
+
+  if (booking.escrowState !== "locked") {
+    throw new BookingEscrowStateError(
+      `Booking "${bookingId}" must be locked with a persisted escrow contractId to release it (escrowState is "${booking.escrowState}")`,
+    );
   }
   if (lifecycle.action !== "approved") {
     throw new BookingEscrowStateError(
       `Booking "${bookingId}" cannot be released from its current lifecycle state ("${lifecycle.action}"); it must be "approved"`,
     );
   }
+
+  // A previously signed-but-unapplied release is retried here, on the same
+  // persisted contractId. `escrowReleaseSubmittedAt` deliberately does not
+  // block this: the retry exists precisely for that in-flight case, and the
+  // chain-applied check above is what refuses a retry after success.
   const result = await adapter.release({ contractId: booking.escrowContractId, providerAddress: providerWalletAddress });
   await setEscrowActionTxHash(db, bookingId, "release", result.txHash);
-  return result;
+  return { status: "ready", contractId: booking.escrowContractId, ...result };
 }
 
 /**

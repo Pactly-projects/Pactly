@@ -14,7 +14,15 @@ import {
 import { LOCAL_CURRENCY_UNAVAILABLE_NOTE } from "../lib/money";
 import { signXdr, type Session } from "../wallet";
 import { useFormatTry } from "./TryAmount";
-import type { ActionResponse, BalanceState, BookingLifecycle, DisputeReason, Money, PendingActionKind } from "../api/types";
+import type {
+  ActionResponse,
+  BalanceState,
+  BookingLifecycle,
+  DisputeReason,
+  Money,
+  PendingActionKind,
+  ReleaseDepositResponse,
+} from "../api/types";
 
 export interface BookingActionsProps {
   viewer: "client" | "provider";
@@ -174,12 +182,24 @@ export function BookingActions({
     return "Connection dropped. Nothing changed.";
   }
 
-  async function runAction(kind: ActionKind, build: () => Promise<ActionResponse>, successNotice: string): Promise<void> {
+  async function runAction(
+    kind: ActionKind,
+    build: () => Promise<ActionResponse | ReleaseDepositResponse>,
+    successNotice: string,
+  ): Promise<void> {
     if (!session || busyAction) return;
     setBusyAction(kind);
     setNotice(undefined);
     try {
       const built = await build();
+      // A release the chain already shows as applied has nothing left to
+      // sign or submit -- never ask for a second signature against an
+      // escrow that already paid.
+      if (!("unsignedXdr" in built)) {
+        setNotice({ text: "This deposit is already released." });
+        onActionSubmitted?.();
+        return;
+      }
       let signedXdr: string;
       try {
         signedXdr = await signXdr(built.unsignedXdr, session.walletAddress);
@@ -357,11 +377,43 @@ export function BookingActions({
   const isBusy = busyAction !== undefined;
 
   if (isPending) {
+    // A release that was signed and relayed but has not been applied on
+    // chain is retryable, always against the same persisted escrow. The
+    // backend refuses the retry (and reports "already released") once the
+    // chain shows it applied, so this is the only action shown here.
+    const canRetryRelease = pendingAction === "release" && viewer === "provider" && Boolean(session);
     return (
       <div className="booking-actions">
-        <p className="booking-card__notice" aria-live="polite">
-          Waiting for the network to confirm.
-        </p>
+        {!notice && (
+          <p className="booking-card__notice" aria-live="polite">
+            {canRetryRelease
+              ? "Your release signature was sent but hasn't been confirmed yet."
+              : "Waiting for the network to confirm."}
+          </p>
+        )}
+        {canRetryRelease && (
+          <div className="booking-card__actions">
+            <button
+              type="button"
+              className="button-primary"
+              disabled={isBusy}
+              onClick={() =>
+                void runAction(
+                  "release",
+                  () => releaseDeposit(id, session!),
+                  "Release sent again. Waiting for it to confirm.",
+                )
+              }
+            >
+              {busyAction === "release" ? "Confirm with your passkey…" : "Retry release"}
+            </button>
+          </div>
+        )}
+        {notice && (
+          <p className={`booking-card__notice${notice.alert ? " booking-card__notice--alert" : ""}`} aria-live="polite">
+            {notice.text}
+          </p>
+        )}
       </div>
     );
   }

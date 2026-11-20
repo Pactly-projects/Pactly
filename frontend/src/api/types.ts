@@ -243,6 +243,15 @@ export interface ActionResponse {
   txHash: string;
 }
 
+/** `POST /bookings/:id/release`'s own response: `"ready"` carries the
+ * rebuilt release XDR to sign (the first attempt, or a retry of a signed
+ * but unapplied one, always against the same persisted contract id);
+ * `"applied"` means the chain already shows the release applied, so there
+ * is nothing to sign or submit again. */
+export type ReleaseDepositResponse =
+  | ({ status: "ready"; contractId: string } & ActionResponse)
+  | { status: "applied"; contractId: string };
+
 export type DisputeOutcome = "refund-client" | "pay-provider";
 /** Story 3.6 (review round): bound to the opener's own role -- a client may
  * claim `client-cancel`, `provider-no-show` or `disagreement`; a provider
