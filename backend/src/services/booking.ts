@@ -207,11 +207,11 @@ export class SlotTakenError extends Error {
   }
 }
 
-/** Review follow-up: a per-wallet cap on *pending* holds (not yet locked)
- * across every provider, so one wallet cannot tie up an unbounded number of
- * slots at once. */
+/** Review follow-up (Issue #51): a per-wallet cap on *pending* holds (not
+ * yet locked) across every provider, so one wallet cannot tie up an
+ * unbounded number of slots at once. The limit is 3 open holds. */
 export class TooManyHoldsError extends Error {
-  constructor(message = "You already have too many slots on hold. Complete or let one expire first.") {
+  constructor(message = "You already have 3 slots on hold. Complete or let one expire before holding another.") {
     super(message);
     this.name = "TooManyHoldsError";
   }
