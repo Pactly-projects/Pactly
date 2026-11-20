@@ -219,6 +219,8 @@ export interface ProviderBookingListItem extends BookingListItemBase {
   /** Full wallet address -- shortened only at render time (`lib/stellar.ts`'s
    * `shortenStellarId`, the same helper `EscrowProof` already uses). */
   clientWalletAddress: string;
+  /** Optional client contact email for the shop's post-release mailto draft. */
+  clientEmail: string | null;
 }
 
 export interface MyBookingsResponse {

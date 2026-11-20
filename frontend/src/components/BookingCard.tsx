@@ -4,6 +4,7 @@ import { BookingActions } from "./BookingActions";
 import { Countdown } from "./Countdown";
 import { StateLabel } from "./StateLabel";
 import { TryAmount } from "./TryAmount";
+import { bookingProofUrl, buildReleaseMailto } from "../lib/releaseMailto";
 import { stellarExplorerContractUrl, stellarExplorerTransactionUrl, trustlessWorkViewerUrl } from "../lib/stellar";
 import { formatSlotDay, formatSlotTime } from "../lib/time";
 import type { Session } from "../wallet";
@@ -53,6 +54,11 @@ export interface BookingCardProps {
   onUnauthorized?: () => void;
   /** Held, not yet locked: resume the booking screen for this slot. */
   continueHref?: string;
+  /** Optional client email — when set and the deposit is released, the
+   * shop (provider) sees a mailto draft. Never required. */
+  clientEmail?: string | null;
+  /** Shop display name for the mailto draft body (provider view only). */
+  shopName?: string;
 }
 
 /** The balance row's own three-state wording (Epic 3 context: "Balance
@@ -93,7 +99,20 @@ export function BookingCard({
   onActionSubmitted,
   onUnauthorized,
   continueHref,
+  clientEmail,
+  shopName,
 }: BookingCardProps) {
+  const releaseMailto =
+    viewer === "provider"
+      ? buildReleaseMailto({
+          escrowState,
+          clientEmail,
+          shopName: shopName ?? "",
+          slotStartsAt,
+          proofUrl: bookingProofUrl(id),
+        })
+      : undefined;
+
   return (
     <article className="booking-card">
       <header className="booking-card__header">
@@ -167,6 +186,12 @@ export function BookingCard({
         onActionSubmitted={onActionSubmitted}
         onUnauthorized={onUnauthorized}
       />
+
+      {releaseMailto && (
+        <a className="button-ghost" href={releaseMailto} style={{ marginTop: "var(--space-3)", textDecoration: "none", display: "inline-flex" }}>
+          Email the client
+        </a>
+      )}
     </article>
   );
 }

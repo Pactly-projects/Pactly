@@ -733,6 +733,7 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     const providerId = typeof body?.providerId === "string" ? body.providerId : undefined;
     const slotStartsAt = typeof body?.slotStartsAt === "number" ? body.slotStartsAt : undefined;
     const tzOffsetMinutes = typeof body?.tzOffsetMinutes === "number" ? body.tzOffsetMinutes : undefined;
+    const clientEmail = typeof body?.clientEmail === "string" ? body.clientEmail : undefined;
     if (!providerId || slotStartsAt === undefined) {
       return c.json(
         { code: "invalid_request", message: "providerId and slotStartsAt are required." },
@@ -748,6 +749,7 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
         clientWalletAddress: c.get("walletAddress"),
         slotStartsAt,
         tzOffsetMinutes,
+        clientEmail,
       });
       return c.json(result, 201);
     } catch (error) {

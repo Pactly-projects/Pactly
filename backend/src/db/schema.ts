@@ -161,6 +161,9 @@ export const bookings = sqliteTable("bookings", {
     .notNull()
     .references(() => providerProfiles.id),
   clientWalletAddress: text("client_wallet_address").notNull(),
+  /** Optional client contact email for post-release shop mailto drafts.
+   * Never required for booking; never shown on the public proof page. */
+  clientEmail: text("client_email"),
   /** The token contract the deposit is denominated in (C... or G...). */
   tokenAddress: text("token_address").notNull(),
   /** Integer string, smallest unit (AD-7); the amount locked on chain. */

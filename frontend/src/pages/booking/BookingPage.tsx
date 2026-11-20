@@ -112,6 +112,9 @@ export function BookingPage() {
   const [localDeposit, setLocalDeposit] = useState<LocalDepositView | undefined>();
   const [localBusy, setLocalBusy] = useState(false);
   const [localNotice, setLocalNotice] = useState<string | undefined>();
+  /** Optional contact email stored on the booking so the shop can open a
+   * mailto draft after release — Pactly never sends mail itself. */
+  const [clientEmail, setClientEmail] = useState("");
 
   // Review follow-up: the flow's own "engine" state (which contractId is in
   // play, whether a deploy has actually been submitted) lives in a ref, not
@@ -214,7 +217,13 @@ export function BookingPage() {
     if (!session || !providerId || slotStartsAt === undefined || hold) return;
     resumeAttemptedRef.current = true;
     void holdMutation
-      .mutateAsync({ providerId, slotStartsAt, token: session.token, tzOffsetMinutes: new Date().getTimezoneOffset() })
+      .mutateAsync({
+        providerId,
+        slotStartsAt,
+        token: session.token,
+        tzOffsetMinutes: new Date().getTimezoneOffset(),
+        ...(clientEmail.trim() ? { clientEmail: clientEmail.trim() } : {}),
+      })
       .then((result) => {
         setHold(result);
         setHoldEndedWhileIdle(false);
@@ -280,7 +289,13 @@ export function BookingPage() {
       // relying on a `useHoldSlot(session)`-style hook whose closure would
       // still hold the *previous* (absent) session on this very first call
       // -- `setSession` above only takes effect on the next render.
-      const result = await holdMutation.mutateAsync({ providerId, slotStartsAt, token: activeSession.token, tzOffsetMinutes: new Date().getTimezoneOffset() });
+      const result = await holdMutation.mutateAsync({
+        providerId,
+        slotStartsAt,
+        token: activeSession.token,
+        tzOffsetMinutes: new Date().getTimezoneOffset(),
+        ...(clientEmail.trim() ? { clientEmail: clientEmail.trim() } : {}),
+      });
       setHold(result);
     } catch (error) {
       if (error instanceof ApiError) {
@@ -707,6 +722,17 @@ export function BookingPage() {
                   <p>Your hold ended. Hold this slot again.</p>
                 </div>
               )}
+              <div className="field">
+                <label htmlFor="booking-client-email">Email for the shop (optional)</label>
+                <input
+                  id="booking-client-email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  value={clientEmail}
+                  onChange={(event) => setClientEmail(event.target.value)}
+                />
+              </div>
               <button type="button" className="button-primary" onClick={ensureSessionAndHold} disabled={connecting || holdMutation.isPending}>
                 {connecting ? "Signing you in…" : holdMutation.isPending ? "Holding your slot…" : session ? "Hold this slot" : "Sign in and hold this slot"}
               </button>

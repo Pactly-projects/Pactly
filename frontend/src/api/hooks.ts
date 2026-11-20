@@ -179,6 +179,8 @@ export interface HoldSlotInput {
   providerId: string;
   slotStartsAt: number;
   tzOffsetMinutes?: number;
+  /** Optional client contact email for the shop's post-release mailto draft. */
+  clientEmail?: string;
 }
 
 /**
