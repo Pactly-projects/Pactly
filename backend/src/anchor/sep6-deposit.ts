@@ -36,7 +36,8 @@ export interface BankDetails {
 export interface OpenSep6DepositParams {
   token: string;
   account: string;
-  /** Decimal string in local currency (TRY, 2 decimal places). */
+  /** Decimal string in the anchor's local currency, with the anchor's own
+   * reported decimals. */
   amount: string;
   /** Booking id, sent as the anchor's memo/reference when it accepts one. */
   memo: string;
@@ -144,7 +145,7 @@ function parseSep6Transaction(body: unknown): Sep6Transaction {
 
 /** Reads advertised min/max from `/sep6/info` for the anchor's USDC
  * deposit. Missing limits mean the sandbox advertises none -- the service
- * then skips the range check rather than inventing 50–3000 TRY. */
+ * then skips the range check rather than inventing its own limits. */
 export async function fetchSep6DepositLimits(options: Sep6Options = {}): Promise<Sep6Limits> {
   const fetchImpl = options.fetchImpl ?? defaultAnchorFetch;
   const { transferServer, assetCode } = await resolveTransferServer(fetchImpl);
@@ -179,9 +180,8 @@ export async function openSep6Deposit(
   const url = new URL(`${transferServer}/deposit`);
   url.searchParams.set("asset_code", assetCode);
   url.searchParams.set("account", params.account);
-  // This sandbox (and SEP-6 deposit generally) takes the *off-chain* amount
-  // -- TRY at 2 decimal places -- not the USDC 7dp string. Sending
-  // "90.0000000" is refused with "amount supports at most 2 decimal places".
+  // SEP-6 deposit takes the *off-chain* amount in the anchor's local
+  // currency (with the anchor's own decimals), not the USDC 7dp string.
   url.searchParams.set("amount", params.amount);
   url.searchParams.set("funding_method", "bank_account");
   if (params.memo.length > 0 && params.memo.length <= 28) {

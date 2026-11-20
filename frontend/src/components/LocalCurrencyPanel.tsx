@@ -2,12 +2,15 @@ import { useState } from "react";
 
 import { ApiError } from "../api/client";
 import type { LocalDepositView } from "../api/types";
-import { TryAmount } from "./TryAmount";
+import { useLocalCurrencyRate } from "../api/hooks";
+import { LOCAL_CURRENCY_UNAVAILABLE } from "../lib/money";
+import { LocalAmount } from "./LocalAmount";
 
 export interface LocalCurrencyPanelProps {
   deposit: LocalDepositView;
   /** Integer string, USDC smallest units (AD-7) -- the deposit the transfer
-   * has to cover, shown in TRY beside the bank details. */
+   * has to cover, shown in the anchor's local currency beside the bank
+   * details. */
   amount: string;
   busy: boolean;
   onSimulate: () => void;
@@ -47,6 +50,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
  */
 export function LocalCurrencyPanel({ deposit, amount, busy, onSimulate, onRetry }: LocalCurrencyPanelProps) {
   const { bankDetails } = deposit;
+  const localCurrency = useLocalCurrencyRate();
   return (
     <div className="local-deposit">
       <p className="local-deposit__status" aria-live="polite">
@@ -56,7 +60,7 @@ export function LocalCurrencyPanel({ deposit, amount, busy, onSimulate, onRetry 
       <dl className="local-deposit__details">
         <dt>Amount</dt>
         <dd>
-          <TryAmount amount={amount} />
+          <LocalAmount amount={amount} />
         </dd>
         {bankDetails.organization && (
           <>
@@ -72,15 +76,22 @@ export function LocalCurrencyPanel({ deposit, amount, busy, onSimulate, onRetry 
           {deposit.reason ?? "The transfer did not go through. Nothing was taken -- try again."}
         </p>
       )}
-      {deposit.status === "waiting" && (
-        <p className="local-deposit__how">This is a sandbox bank. Confirm the TRY send below — no real transfer is made.</p>
-      )}
+      {deposit.status === "waiting" &&
+        (localCurrency ? (
+          <p className="local-deposit__how">
+            This is a sandbox bank. Confirm the {localCurrency.currency} send below — no real transfer is made.
+          </p>
+        ) : (
+          <p className="local-deposit__how" role="alert">
+            {LOCAL_CURRENCY_UNAVAILABLE}
+          </p>
+        ))}
       {deposit.status === "paying" && (
         <p className="local-deposit__how">Your transfer is in. Pactly is confirming it — this usually takes a moment.</p>
       )}
       {deposit.sandbox && deposit.status === "waiting" && (
         <button type="button" className="button-primary" disabled={busy} onClick={onSimulate}>
-          {busy ? "Confirming…" : "Confirm TRY sent"}
+          {busy ? "Confirming…" : `Confirm ${localCurrency?.currency ?? "transfer"} sent`}
         </button>
       )}
       {deposit.status === "failed" && (

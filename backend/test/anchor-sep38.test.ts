@@ -37,6 +37,7 @@ const SEP38_INFO_BODY = {
     { asset: SELL_ASSET },
     {
       asset: "iso4217:TRY",
+      decimals: 2,
       country_codes: ["TUR"],
       sell_delivery_methods: [{ name: "bank_account", description: "Turkish bank transfer" }],
       buy_delivery_methods: [{ name: "bank_account", description: "Turkish bank transfer" }],
@@ -101,7 +102,7 @@ test("fetchIndicativePrice returns the anchor's indicative price, with the curre
 
   assert.equal(result.amount, "4500000000");
   assert.equal(result.asset, "USDC");
-  assert.deepEqual(result.fiat, { amount: "21843.51", currency: "TRY" });
+  assert.deepEqual(result.fiat, { amount: "21843.51", currency: "TRY", decimals: 2 });
   assert.equal(result.spreadApplied, true);
   assert.equal(typeof result.quotedAt, "number");
   assert.equal(calls.price.length, 1);
@@ -181,6 +182,67 @@ test("an unsupported pair (sep38/info never advertises the sell asset) throws An
     (error: unknown) => error instanceof AnchorQuoteUnsupportedError,
   );
   assert.equal(calls.price.length, 0);
+});
+
+test("decimals come from SEP-38 /prices when the anchor's /info entry omits them", async () => {
+  resetCaches();
+  let pricesCalls = 0;
+  const info = { assets: [{ asset: SELL_ASSET }, { asset: "iso4217:USD" }] };
+  const fetchImpl: Sep38FetchLike = async (url) => {
+    if (url.endsWith("/.well-known/stellar.toml")) {
+      return { ok: true, status: 200, text: async () => REALISTIC_TOML, json: async () => ({}) };
+    }
+    if (url.endsWith("/sep38/info")) {
+      return { ok: true, status: 200, json: async () => info, text: async () => JSON.stringify(info) };
+    }
+    const parsed = new URL(url);
+    if (parsed.pathname === "/sep38/prices") {
+      pricesCalls += 1;
+      assert.equal(parsed.searchParams.get("sell_asset"), SELL_ASSET);
+      assert.equal(parsed.searchParams.get("sell_amount"), "1");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ buy_assets: [{ asset: "iso4217:USD", decimals: 3 }] }),
+        text: async () => "",
+      };
+    }
+    assert.equal(parsed.pathname, "/sep38/price");
+    return { ok: true, status: 200, json: async () => ({ buy_amount: "12.345" }), text: async () => "" };
+  };
+
+  const result = await fetchIndicativePrice({ amount: "10000000" }, { fetchImpl });
+
+  assert.deepEqual(result.fiat, { amount: "12.345", currency: "USD", decimals: 3 });
+  assert.equal(pricesCalls, 1);
+
+  await fetchIndicativePrice({ amount: "10000000" }, { fetchImpl });
+  assert.equal(pricesCalls, 1, "the resolved config is cached with its decimals");
+});
+
+test("a config with no usable decimals fails plainly instead of assuming two", async () => {
+  resetCaches();
+  const info = { assets: [{ asset: SELL_ASSET }, { asset: "iso4217:USD" }] };
+  const fetchImpl: Sep38FetchLike = async (url) => {
+    if (url.endsWith("/.well-known/stellar.toml")) {
+      return { ok: true, status: 200, text: async () => REALISTIC_TOML, json: async () => ({}) };
+    }
+    if (url.endsWith("/sep38/info")) {
+      return { ok: true, status: 200, json: async () => info, text: async () => JSON.stringify(info) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ buy_assets: [{ asset: "iso4217:USD" }] }),
+      text: async () => "",
+    };
+  };
+
+  await assert.rejects(
+    () => fetchIndicativePrice({ amount: "10000000" }, { fetchImpl }),
+    (error: unknown) =>
+      error instanceof AnchorQuoteUnsupportedError && /valid decimals value for USD/.test(error.message),
+  );
 });
 
 test("the anchor's own 'unsupported pair' error from the price endpoint maps to AnchorQuoteUnsupportedError", async () => {

@@ -99,7 +99,7 @@ function makeRouter(anchorServer: Keypair, state: RouterState): AnchorFetchLike 
       return { ok: true, status: 200, json: async () => ({}), text: async () => toml };
     }
     if (parsed.pathname === "/sep38/info") {
-      return json(200, { assets: [{ asset: SELL_ASSET }, { asset: "iso4217:TRY" }] });
+      return json(200, { assets: [{ asset: SELL_ASSET }, { asset: "iso4217:TRY", decimals: 2 }] });
     }
     if (parsed.pathname === "/sep38/price") {
       return json(200, { buy_amount: "97.51" });

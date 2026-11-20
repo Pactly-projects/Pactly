@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 
 import { EscrowProof } from "./EscrowProof";
-import { TryAmount } from "./TryAmount";
+import { LocalAmount } from "./LocalAmount";
 
 export interface EscrowLaneProps {
-  /** Integer string, USDC smallest units (AD-7) -- shown in TRY. */
+  /** Integer string, USDC smallest units (AD-7) -- shown in the anchor's local currency. */
   depositAmount: string;
   /** `undefined` before a hold exists. */
   holdCountdownLabel?: string;
@@ -43,7 +43,7 @@ export function EscrowLane({ depositAmount, holdCountdownLabel, contractId, txHa
         </svg>
       </div>
       <div className="escrow-lane__amount tabular-nums">
-        <TryAmount amount={depositAmount} />
+        <LocalAmount amount={depositAmount} />
       </div>
       <p className="escrow-lane__state" aria-live="polite">
         {stateLabel}

@@ -1,20 +1,24 @@
 import { useEffect, useState } from "react";
 
-import { useTryRate } from "../api/hooks";
-import { tryToUsdcSmallestUnit, usdcToTry } from "../lib/money";
+import { useLocalCurrencyRate, type LocalCurrencyRate } from "../api/hooks";
+import { localCurrencyToUsdcSmallestUnit, usdcToLocalCurrency } from "../lib/money";
 import { formatSessionFormat } from "../lib/sessionFormat";
 import type { DiscoverAvailability } from "../api/types";
 
 /** Same shape the backend's own `parseDiscoverFilters` requires (AD-7's
  * smallest-unit integer strings, `"0"` allowed) -- a `minPrice`/`maxPrice`
- * that fails this must never reach `usdcToTry`'s own `BigInt(...)` call
+ * that fails this must never reach `usdcToLocalCurrency`'s own `BigInt(...)` call
  * below, even if some future caller forgets to pre-validate it (defence in
  * depth alongside `DiscoverPage`'s own read of the URL). */
 const NON_NEGATIVE_INTEGER_STRING = /^(0|[1-9]\d*)$/;
 
-/** The URL carries the smallest-unit string; the field shows lira. */
-function toPriceInputText(amount: string | undefined, rate: string): string {
-  return amount !== undefined && NON_NEGATIVE_INTEGER_STRING.test(amount) ? usdcToTry(amount, rate) : "";
+/** The URL carries the smallest-unit string; the field shows the anchor's
+ * local currency at the anchor's own decimals. */
+function toPriceInputText(amount: string | undefined, localCurrency: LocalCurrencyRate | undefined): string {
+  if (!localCurrency) return "";
+  return amount !== undefined && NON_NEGATIVE_INTEGER_STRING.test(amount)
+    ? usdcToLocalCurrency(amount, localCurrency.rate, localCurrency.decimals)
+    : "";
 }
 
 /** The complete universe of `sessionFormat` values the demo seed and the
@@ -42,35 +46,42 @@ export interface FilterFieldsProps {
   onAvailabilityChange: (value: DiscoverAvailability | undefined) => void;
 }
 
-/** The min/max price inputs, typed in TRY and converted to the URL's own
- * smallest-unit string at the current rate -- local draft text so a
- * half-typed number is never clobbered by the URL's own re-render,
- * committed on blur or Enter (AC4: "every change updates results without a
- * reload", not necessarily on every keystroke). A committed value is
- * re-derived from the URL, so it may come back a kuruş off what was typed
- * (two roundings at the rate) -- harmless for a filter bound. */
+/** The min/max price inputs, typed in the anchor's currency and converted
+ * to the URL's own smallest-unit string at the current rate -- local draft
+ * text so a half-typed number is never clobbered by the URL's own
+ * re-render, committed on blur or Enter (AC4: "every change updates results
+ * without a reload", not necessarily on every keystroke). A committed value
+ * is re-derived from the URL, so it may come back one minor unit off what
+ * was typed (two roundings at the rate) -- harmless for a filter bound. */
 function PriceRangeField({ minPrice, maxPrice, onPriceRangeChange }: Pick<FilterFieldsProps, "minPrice" | "maxPrice" | "onPriceRangeChange">) {
-  const { rate } = useTryRate();
-  const [minText, setMinText] = useState(toPriceInputText(minPrice, rate));
-  const [maxText, setMaxText] = useState(toPriceInputText(maxPrice, rate));
+  const localCurrency = useLocalCurrencyRate();
+  const [minText, setMinText] = useState(toPriceInputText(minPrice, localCurrency));
+  const [maxText, setMaxText] = useState(toPriceInputText(maxPrice, localCurrency));
 
   useEffect(() => {
-    setMinText(toPriceInputText(minPrice, rate));
-  }, [minPrice, rate]);
+    setMinText(toPriceInputText(minPrice, localCurrency));
+  }, [minPrice, localCurrency]);
   useEffect(() => {
-    setMaxText(toPriceInputText(maxPrice, rate));
-  }, [maxPrice, rate]);
+    setMaxText(toPriceInputText(maxPrice, localCurrency));
+  }, [maxPrice, localCurrency]);
 
   function commit() {
-    const min = minText.trim() === "" ? undefined : tryToUsdcSmallestUnit(minText, rate);
-    const max = maxText.trim() === "" ? undefined : tryToUsdcSmallestUnit(maxText, rate);
+    if (!localCurrency) return;
+    const min =
+      minText.trim() === ""
+        ? undefined
+        : localCurrencyToUsdcSmallestUnit(minText, localCurrency.rate, localCurrency.currency, localCurrency.decimals);
+    const max =
+      maxText.trim() === ""
+        ? undefined
+        : localCurrencyToUsdcSmallestUnit(maxText, localCurrency.rate, localCurrency.currency, localCurrency.decimals);
     onPriceRangeChange(min, max);
   }
 
   return (
     <div className="filter-field__price-range">
       <label className="filter-field__price-input">
-        <span>Min (TRY)</span>
+        <span>Min{localCurrency ? ` (${localCurrency.currency})` : ""}</span>
         <input
           inputMode="decimal"
           value={minText}
@@ -82,7 +93,7 @@ function PriceRangeField({ minPrice, maxPrice, onPriceRangeChange }: Pick<Filter
         />
       </label>
       <label className="filter-field__price-input">
-        <span>Max (TRY)</span>
+        <span>Max{localCurrency ? ` (${localCurrency.currency})` : ""}</span>
         <input
           inputMode="decimal"
           value={maxText}

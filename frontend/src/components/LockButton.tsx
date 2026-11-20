@@ -14,7 +14,7 @@ export interface LockButtonProps {
   onOpenWalletAgain?: () => void;
 }
 
-const TRY_AGAIN_AFTER_MS = 60_000;
+const RETRY_AFTER_MS = 60_000;
 
 /**
  * DESIGN.md's `button-escrow`: the only black button in the product, used
@@ -33,7 +33,7 @@ export function LockButton({ waitingOn, disabled, onClick, onOpenWalletAgain }: 
       setShowTryAgain(false);
       return;
     }
-    const timer = setTimeout(() => setShowTryAgain(true), TRY_AGAIN_AFTER_MS);
+    const timer = setTimeout(() => setShowTryAgain(true), RETRY_AFTER_MS);
     return () => clearTimeout(timer);
   }, [waitingOn]);
 

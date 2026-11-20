@@ -6,7 +6,7 @@ import type { ProviderCard as ProviderCardData } from "../api/types";
 import { providerPhotoSrc } from "../lib/providerPhotos";
 import { formatSessionFormat } from "../lib/sessionFormat";
 import { DepositPill } from "./DepositPill";
-import { TryAmount } from "./TryAmount";
+import { LocalAmount } from "./LocalAmount";
 
 export interface ProviderCardProps {
   provider: ProviderCardData;
@@ -100,7 +100,7 @@ export function ProviderCard({ provider, variant = "compact", index = 0 }: Provi
         </div>
         <div className="editorial-featured__side">
           <span className="editorial-card__price" style={{ fontSize: "var(--text-18)" }}>
-            <TryAmount amount={provider.price.amount} />
+            <LocalAmount amount={provider.price.amount} />
           </span>
           <DepositPill variant="row" amount={provider.deposit.amount} cancellationWindowHours={provider.cancellationWindowHours} />
           <Link to={lockHref} className="editorial-cta">
@@ -144,7 +144,7 @@ export function ProviderCard({ provider, variant = "compact", index = 0 }: Provi
       </div>
       <DepositPill variant="row" amount={provider.deposit.amount} cancellationWindowHours={provider.cancellationWindowHours} />
       <div className="editorial-card__foot">
-        <TryAmount amount={provider.price.amount} className="editorial-card__price" />
+        <LocalAmount amount={provider.price.amount} className="editorial-card__price" />
         <Link to={lockHref} className="editorial-card__cta">
           {firstSlot ? "Lock" : "View"}
           <ArrowRightIcon size={14} weight="bold" aria-hidden="true" />

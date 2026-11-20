@@ -9,7 +9,7 @@ import { BookingCard, BALANCE_STATE_LABEL } from "../../components/BookingCard";
 import { Countdown } from "../../components/Countdown";
 import { PageMasthead } from "../../components/PageMasthead";
 import { StateLabel } from "../../components/StateLabel";
-import { TryAmount } from "../../components/TryAmount";
+import { LocalAmount } from "../../components/LocalAmount";
 import { shortenStellarId, stellarExplorerContractUrl, stellarExplorerTransactionUrl, trustlessWorkViewerUrl } from "../../lib/stellar";
 import { formatSlotDay, formatSlotTime } from "../../lib/time";
 import { SignInPanel } from "../../components/SignInPanel";
@@ -126,10 +126,10 @@ export function BookingsPage() {
                     </td>
                     <td className="tabular-nums">{shortenStellarId(booking.clientWalletAddress)}</td>
                     <td className="tabular-nums">
-                      <TryAmount amount={booking.deposit.amount} />
+                      <LocalAmount amount={booking.deposit.amount} />
                     </td>
                     <td className="tabular-nums">
-                      <TryAmount amount={booking.balance.amount} /> · {BALANCE_STATE_LABEL[booking.balanceState]}
+                      <LocalAmount amount={booking.balance.amount} /> · {BALANCE_STATE_LABEL[booking.balanceState]}
                       {/* Review follow-up: lives in this cell, not
                        * `BookingActions`'s own Actions column, which renders
                        * nothing once the booking leaves `locked` -- exactly

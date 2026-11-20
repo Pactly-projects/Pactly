@@ -324,19 +324,26 @@ export interface QuoteResponse {
   asset: string;
   fiat: {
     amount: string;
+    /** The anchor's advertised fiat currency code, never hard-coded. */
     currency: string;
+    /** The fiat asset's display precision, as reported by the anchor. */
+    decimals: number;
   };
   /** UTC epoch seconds. */
   quotedAt: number;
   spreadApplied: true;
 }
 
-/** `GET /rate`'s response -- TRY per 1 USDC as a decimal string (e.g.
- * `"48.5410"`). Display-only, like `QuoteResponse`: never persisted on a
- * booking, never used to compute a deposit server-side (AD-7). */
+/** `GET /rate`'s response -- local currency per 1 USDC as a decimal string
+ * (e.g. `"48.5410"`), plus the anchor's own currency code and decimals.
+ * Display-only, like `QuoteResponse`: never persisted on a booking, never
+ * used to compute a deposit server-side (AD-7). */
 export interface RateResponse {
   rate: string;
-  currency: "TRY";
+  /** The anchor's advertised fiat currency code. */
+  currency: string;
+  /** The fiat asset's display precision, as reported by the anchor. */
+  decimals: number;
   /** UTC epoch seconds. */
   quotedAt: number;
 }

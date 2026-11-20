@@ -6,7 +6,7 @@ import { ApiError } from "../../api/client";
 import { DepositPill } from "../../components/DepositPill";
 import { ProviderHeader } from "../../components/ProviderHeader";
 import { SlotChip } from "../../components/SlotChip";
-import { TryAmount } from "../../components/TryAmount";
+import { LocalAmount } from "../../components/LocalAmount";
 import { providerPhotoSrc } from "../../lib/providerPhotos";
 import { formatSessionFormat } from "../../lib/sessionFormat";
 import { groupSlotsByDay } from "../../lib/time";
@@ -80,7 +80,7 @@ export function ProviderProfilePage() {
 
       <div className="card" style={{ marginTop: "var(--space-6)" }}>
         <div className="price-row">
-          <TryAmount amount={profile.price.amount} className="price-row__amount" />
+          <LocalAmount amount={profile.price.amount} className="price-row__amount" />
           <span className="price-row__meta">
             {formatSessionFormat(profile.sessionFormat)} · {profile.sessionLengthMinutes} min
           </span>
