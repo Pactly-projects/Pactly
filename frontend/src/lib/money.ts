@@ -51,6 +51,21 @@ export function formatBps(bps: number): string {
   return `${(bps / 100).toFixed(bps % 100 === 0 ? 0 : 2)}%`;
 }
 
+/**
+ * Formats a SEP-38 fiat decimal string (e.g. `"21843.51"`) for display with
+ * grouping and two decimals. No symbol is ever added -- the caller prints
+ * the currency code the anchor advertised, so no screen hardcodes one.
+ */
+export function formatFiatAmount(decimal: string): string {
+  const trimmed = decimal.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return trimmed;
+  const [whole = "0", fraction = ""] = trimmed.split(".");
+  const minor = (BigInt(whole) * 100n + BigInt((fraction + "00").slice(0, 2))).toString();
+  const padded = minor.padStart(3, "0");
+  const wholePart = padded.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${wholePart}.${padded.slice(-2)}`;
+}
+
 /** The rules form's own two directions of conversion between a human
  * decimal string (what someone types, e.g. `"90"` or `"90.5"`) and the
  * integer smallest-unit string the API takes and returns (AD-7). Kept next

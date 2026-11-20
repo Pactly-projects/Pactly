@@ -229,6 +229,37 @@ export async function setProviderProfileApproved(db: Db, id: string, isApproved:
   }
 }
 
+/**
+ * The approved-provider text-edit write path. Only the fields a shop is
+ * allowed to change after approval are in this shape; `price_amount`,
+ * `deposit_rate_bps`, `category_id` and `is_approved` are deliberately not
+ * accepted, so no caller of this function can change a commercial term by
+ * editing its profile copy.
+ */
+export interface ProviderProfileTextValues {
+  title: string;
+  bio: string;
+  languages: string;
+  sessionLengthMinutes: number;
+  location: string;
+}
+
+export async function updateProviderProfileText(db: Db, id: string, values: ProviderProfileTextValues): Promise<void> {
+  const result = await db
+    .update(providerProfiles)
+    .set({
+      title: values.title,
+      bio: values.bio,
+      languages: values.languages,
+      sessionLengthMinutes: values.sessionLengthMinutes,
+      location: values.location,
+    })
+    .where(eq(providerProfiles.id, id));
+  if (result.changes === 0) {
+    throw new TypeError(`No provider profile exists with id "${id}"`);
+  }
+}
+
 export async function updateProviderProfileRules(db: Db, id: string, values: ProviderRulesValues): Promise<void> {
   const result = await db
     .update(providerProfiles)

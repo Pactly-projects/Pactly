@@ -2,7 +2,7 @@
  * for provider/category data. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiGet, apiPost, apiPut, ApiError } from "./client";
+import { apiDelete, apiGet, apiPost, apiPut, ApiError } from "./client";
 import type {
   ActionResponse,
   AdminDisputesResponse,
@@ -34,6 +34,8 @@ import type {
   ProviderApplicationInput,
   ProviderApplicationOutcome,
   RateResponse,
+  ClosedDatesResponse,
+  ProviderProfileEditInput,
 } from "./types";
 import { FALLBACK_TRY_PER_USDC } from "../lib/money";
 import type { Session } from "../wallet";
@@ -128,6 +130,16 @@ export function useQuote(amount: string | undefined) {
   });
 }
 
+/**
+ * The imperative quote read the booking screen uses when the figure it is
+ * showing has aged out. `refresh: true` sends `?refresh=1`, which bypasses
+ * the backend's own short cache so the amount the client confirms really is
+ * the anchor's current one. A pure read: it never creates a hold or booking.
+ */
+export function getQuote(amount: string, refresh = false): Promise<QuoteResponse> {
+  return apiGet<QuoteResponse>(`/quote?amount=${amount}${refresh ? "&refresh=1" : ""}`);
+}
+
 const OWN_PROVIDER_KEY = (walletAddress: string | undefined) => ["me", "provider", walletAddress] as const;
 
 /** `GET /me/provider` -- the signed-in provider's own view, including
@@ -163,6 +175,54 @@ export function useUpdateProviderAvailability(session: Session | undefined) {
     mutationFn: (slots: number[]) => apiPut<ProviderProfile>("/me/provider/availability", { slots }, session?.token),
     onSuccess: (profile) => {
       queryClient.setQueryData(OWN_PROVIDER_KEY(session?.walletAddress), profile);
+    },
+  });
+}
+
+const CLOSED_DATES_KEY = (walletAddress: string | undefined) => ["me", "provider", "closed-dates", walletAddress] as const;
+
+/** The shop's one-off closures. Kept separate from the slot pattern so
+ * closing a day never edits the repeating week. */
+export function useClosedDates(session: Session | undefined) {
+  return useQuery({
+    queryKey: CLOSED_DATES_KEY(session?.walletAddress),
+    queryFn: () => apiGet<ClosedDatesResponse>("/me/provider/closed-dates", session?.token),
+    enabled: Boolean(session),
+    retry: false,
+  });
+}
+
+export function useCloseDate(session: Session | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (date: string) => apiPut<ClosedDatesResponse>(`/me/provider/closed-dates/${date}`, {}, session?.token),
+    onSuccess: (result) => {
+      queryClient.setQueryData(CLOSED_DATES_KEY(session?.walletAddress), result);
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+    },
+  });
+}
+
+export function useReopenDate(session: Session | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (date: string) => apiDelete<ClosedDatesResponse>(`/me/provider/closed-dates/${date}`, session?.token),
+    onSuccess: (result) => {
+      queryClient.setQueryData(CLOSED_DATES_KEY(session?.walletAddress), result);
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+    },
+  });
+}
+
+/** An approved shop's text edits. The response has the original price and
+ * deposit, so the form can show what stayed frozen. */
+export function useUpdateProviderProfile(session: Session | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ProviderProfileEditInput) => apiPut<ProviderProfile>("/me/provider/profile", input, session?.token),
+    onSuccess: (profile) => {
+      queryClient.setQueryData(OWN_PROVIDER_KEY(session?.walletAddress), profile);
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
     },
   });
 }
@@ -393,12 +453,21 @@ export function verifyAnchorChallenge(bookingId: string, signedXdr: string, sess
   return apiPost<{ ok: true }>(`/bookings/${bookingId}/anchor/verify`, { signedXdr }, session.token);
 }
 
-export function openLocalDeposit(bookingId: string, session: Session): Promise<OpenLocalDepositResponse> {
-  return apiPost<OpenLocalDepositResponse>(`/bookings/${bookingId}/deposit/local`, {}, session.token);
+export function openLocalDeposit(
+  bookingId: string,
+  session: Session,
+  quote?: QuoteResponse,
+): Promise<OpenLocalDepositResponse> {
+  return apiPost<OpenLocalDepositResponse>(`/bookings/${bookingId}/deposit/local`, quote ? { quote } : {}, session.token);
 }
 
-export function submitLocalDepositTrustline(bookingId: string, signedXdr: string, session: Session): Promise<OpenLocalDepositResponse> {
-  return apiPost<OpenLocalDepositResponse>(`/bookings/${bookingId}/deposit/local/trustline`, { signedXdr }, session.token);
+export function submitLocalDepositTrustline(
+  bookingId: string,
+  signedXdr: string,
+  session: Session,
+  quote?: QuoteResponse,
+): Promise<OpenLocalDepositResponse> {
+  return apiPost<OpenLocalDepositResponse>(`/bookings/${bookingId}/deposit/local/trustline`, { signedXdr, quote }, session.token);
 }
 
 export function getLocalDeposit(bookingId: string, session: Session): Promise<LocalDepositView> {

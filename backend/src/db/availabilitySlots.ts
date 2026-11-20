@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql } from "drizzle-orm";
 
 import type { Db } from "./client.js";
+import { slotNotOnClosedDate } from "./closedDates.js";
 import { availabilitySlots, bookings } from "./schema.js";
 
 export type AvailabilitySlotRow = typeof availabilitySlots.$inferSelect;
@@ -121,6 +122,9 @@ export async function listEarliestFutureSlotsByProvider(
         inArray(availabilitySlots.providerProfileId, providerProfileIds),
         gt(availabilitySlots.startsAt, now),
         isNull(availabilitySlots.withdrawnAt),
+        // A one-off closed date removes the slot from every client-facing
+        // list without rewriting the provider's repeating slot pattern.
+        slotNotOnClosedDate(),
         // Story 3.4: a held or locked slot is never advertised on a card.
         notExists(db.select({ one: sql`1` }).from(bookings).where(activeBookingForSlot(now))),
       ),
@@ -154,6 +158,7 @@ export async function listOpenFutureSlots(
     eq(availabilitySlots.providerProfileId, providerProfileId),
     gt(availabilitySlots.startsAt, now),
     isNull(availabilitySlots.withdrawnAt),
+    slotNotOnClosedDate(),
     notExists(db.select({ one: sql`1` }).from(bookings).where(activeBookingForSlot(now))),
   ];
   if (options.withinSeconds !== undefined) {
@@ -218,6 +223,7 @@ export async function listOpenSlotsInRange(
         gte(availabilitySlots.startsAt, rangeStart),
         lt(availabilitySlots.startsAt, rangeEnd),
         isNull(availabilitySlots.withdrawnAt),
+        slotNotOnClosedDate(),
         notExists(db.select({ one: sql`1` }).from(bookings).where(activeBookingForSlot(now))),
       ),
     )

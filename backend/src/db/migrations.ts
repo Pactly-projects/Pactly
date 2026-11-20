@@ -60,6 +60,14 @@ const STATEMENTS: readonly string[] = [
     created_at INTEGER NOT NULL,
     UNIQUE (provider_profile_id, starts_at)
   )`,
+  // One-off closures: a closed day is its own row, so the provider's
+  // repeating slot pattern is never rewritten to take a day off.
+  `CREATE TABLE IF NOT EXISTS provider_closed_dates (
+    provider_profile_id TEXT NOT NULL REFERENCES provider_profiles(id),
+    date TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (provider_profile_id, date)
+  )`,
   `CREATE TABLE IF NOT EXISTS bookings (
     id TEXT PRIMARY KEY,
     provider_profile_id TEXT NOT NULL REFERENCES provider_profiles(id),

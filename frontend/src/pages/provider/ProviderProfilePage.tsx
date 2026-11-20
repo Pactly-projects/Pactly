@@ -79,6 +79,15 @@ export function ProviderProfilePage() {
       />
 
       <div className="card" style={{ marginTop: "var(--space-6)" }}>
+        {profile.bio && (
+          <div style={{ marginBottom: "var(--space-5)" }}>
+            <h2 style={{ fontSize: "var(--text-18)" }}>About this shop</h2>
+            <p>{profile.bio}</p>
+          </div>
+        )}
+        {profile.languages.length > 0 && (
+          <p style={{ marginBottom: "var(--space-5)" }}>Languages: {profile.languages.join(", ")}</p>
+        )}
         <div className="price-row">
           <TryAmount amount={profile.price.amount} className="price-row__amount" />
           <span className="price-row__meta">

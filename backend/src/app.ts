@@ -50,9 +50,12 @@ import { RateUnavailableError, getTryRate } from "./services/rate.js";
 import type { Db } from "./db/client.js";
 import {
   InvalidAvailabilitySlotsError,
+  InvalidProviderProfileError,
   InvalidProviderRulesError,
   NotAProviderError,
+  ProviderNotApprovedError,
   ProviderNotFoundError,
+  updateProviderProfile,
   getOwnProviderProfile,
   getPublicProviderProfile,
   listCategoriesWithProviderCounts,
@@ -124,8 +127,17 @@ import {
   AnchorQuoteUnavailableError,
   AnchorQuoteUnsupportedError,
   AnchorUnavailableError,
+  QuoteMismatchError,
+  QuoteStaleError,
 } from "./anchor/errors.js";
 import { fetchIndicativePrice, type Sep38FetchLike } from "./anchor/sep38.js";
+import {
+  ClosedDateBookingError,
+  InvalidClosedDateError,
+  closeDate,
+  listClosedDatesForWallet,
+  reopenDate,
+} from "./services/availability.js";
 import type { AnchorFetchLike } from "./anchor/http.js";
 import {
   SandboxOnlyError,
@@ -135,6 +147,7 @@ import {
   pollLocalDeposit,
   simulateLocalDeposit,
   submitLocalDepositTrustline,
+  type ConfirmedQuote,
   type LocalDepositDeps,
 } from "./services/localDeposit.js";
 
@@ -587,7 +600,12 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       return c.json({ code: "INVALID_AMOUNT", message: "amount must be a positive integer string." }, 400);
     }
     try {
-      const quote = await fetchIndicativePrice({ amount }, { fetchImpl: quoteFetchImpl });
+      // `refresh=1` is the screen's "the quote I am showing has aged out"
+      // call: bypass the backend's own short cache so the amount the client
+      // confirms is genuinely the anchor's current one. It is still a plain
+      // read -- no hold, no booking, no escrow state is touched.
+      const refresh = c.req.query("refresh") === "1";
+      const quote = await fetchIndicativePrice({ amount }, { fetchImpl: quoteFetchImpl, forceRefresh: refresh });
       return c.json(quote);
     } catch (error) {
       if (error instanceof AnchorQuoteUnsupportedError) {
@@ -655,6 +673,145 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       if (error instanceof InvalidAvailabilitySlotsError) {
         return c.json({ code: "INVALID_SLOTS", message: error.message, details: error.details }, 400);
       }
+      throw error;
+    }
+  });
+
+  /** `PUT /me/provider/profile`: an approved shop edits its own copy. The
+   * request carries no price, deposit rate or category, so a text edit can
+   * never change a commercial term; a pending/rejected shop is refused. */
+  app.put("/me/provider/profile", requirePactlyAuth, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    try {
+      const profile = await updateProviderProfile(db, c.get("walletAddress"), {
+        title: typeof body?.title === "string" ? body.title : "",
+        bio: typeof body?.bio === "string" ? body.bio : "",
+        languages: Array.isArray(body?.languages) ? (body.languages as string[]) : [],
+        sessionLengthMinutes:
+          typeof body?.sessionLengthMinutes === "number" ? body.sessionLengthMinutes : Number.NaN,
+        location: typeof body?.location === "string" ? body.location : "",
+      });
+      return c.json(profile);
+    } catch (error) {
+      if (error instanceof NotAProviderError) {
+        return c.json({ code: "NOT_A_PROVIDER", message: error.message }, 404);
+      }
+      if (error instanceof ProviderNotApprovedError) {
+        return c.json({ code: "NOT_APPROVED", message: error.message }, 403);
+      }
+      if (error instanceof InvalidProviderProfileError) {
+        return c.json({ code: "INVALID_PROFILE", message: error.message, details: error.details }, 400);
+      }
+      throw error;
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // One-off closures. A closed date is an overlay on the provider's slot
+  // pattern, not a rewrite of it: the same weekday next week keeps its
+  // slots. Every route resolves "whose shop" from the caller's own wallet.
+  // ---------------------------------------------------------------------
+
+  const closedDateErrorResponse = (error: unknown, c: Context<{ Variables: Variables }>) => {
+    if (error instanceof NotAProviderError) {
+      return c.json({ code: "NOT_A_PROVIDER", message: error.message }, 404);
+    }
+    if (error instanceof InvalidClosedDateError) {
+      return c.json({ code: "INVALID_CLOSED_DATE", message: error.message, details: error.details }, 400);
+    }
+    if (error instanceof ClosedDateBookingError) {
+      return c.json(
+        {
+          code: "DATE_HAS_BOOKING",
+          message: error.message,
+          details: { bookingId: error.bookingId, slotStartsAt: error.slotStartsAt, escrowState: error.escrowState },
+        },
+        409,
+      );
+    }
+    return undefined;
+  };
+
+  app.get("/me/provider/closed-dates", requirePactlyAuth, async (c) => {
+    try {
+      return c.json({ closedDates: await listClosedDatesForWallet(db, c.get("walletAddress")) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  app.post("/me/provider/closed-dates", requirePactlyAuth, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    try {
+      return c.json({ closedDates: await closeDate(db, c.get("walletAddress"), body?.date) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  app.put("/me/provider/closed-dates/:date", requirePactlyAuth, async (c) => {
+    try {
+      return c.json({ closedDates: await closeDate(db, c.get("walletAddress"), c.req.param("date")) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  app.delete("/me/provider/closed-dates/:date", requirePactlyAuth, async (c) => {
+    try {
+      return c.json({ closedDates: await reopenDate(db, c.get("walletAddress"), c.req.param("date")) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  // The panel's own wording for the same operations, kept as aliases so a
+  // client never has to remember two different shapes for one closure.
+  app.get("/me/provider/availability/closed", requirePactlyAuth, async (c) => {
+    try {
+      return c.json({ closedDates: await listClosedDatesForWallet(db, c.get("walletAddress")) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  app.post("/me/provider/availability/closed", requirePactlyAuth, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    try {
+      return c.json({ closedDates: await closeDate(db, c.get("walletAddress"), body?.date) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  app.put("/me/provider/availability/closed/:date", requirePactlyAuth, async (c) => {
+    try {
+      return c.json({ closedDates: await closeDate(db, c.get("walletAddress"), c.req.param("date")) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  app.delete("/me/provider/availability/closed/:date", requirePactlyAuth, async (c) => {
+    try {
+      return c.json({ closedDates: await reopenDate(db, c.get("walletAddress"), c.req.param("date")) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
       throw error;
     }
   });
@@ -902,6 +1059,12 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     if (error instanceof XdrMismatchError) {
       return c.json({ code: "XDR_MISMATCH", message: error.message }, 409);
     }
+    if (error instanceof QuoteStaleError) {
+      return c.json({ code: "QUOTE_STALE", message: error.message, details: error.details }, 409);
+    }
+    if (error instanceof QuoteMismatchError) {
+      return c.json({ code: "QUOTE_MISMATCH", message: error.message }, 409);
+    }
     if (error instanceof AmountOutOfRangeError) {
       return c.json(
         {
@@ -953,6 +1116,32 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       return c.json({ code: "PAYMENT_UNAVAILABLE", message: "We couldn't reach the network just now." }, 503);
     }
     return undefined;
+  }
+
+  /** Reads the client's confirmed SEP-38 quote from a request body. Only a
+   * complete, typed quote counts as a confirmation; anything else falls back
+   * to the backend's own fresh quote rather than trusting an arbitrary fiat
+   * amount from the client. */
+  function parseConfirmedQuote(body: unknown): ConfirmedQuote | undefined {
+    const raw = (body as { quote?: unknown } | undefined)?.quote;
+    if (typeof raw !== "object" || raw === null) return undefined;
+    const quote = raw as Record<string, unknown>;
+    const fiat = quote.fiat;
+    if (
+      typeof quote.amount !== "string" ||
+      typeof quote.quotedAt !== "number" ||
+      typeof fiat !== "object" ||
+      fiat === null ||
+      typeof (fiat as Record<string, unknown>).amount !== "string"
+    ) {
+      return undefined;
+    }
+    return {
+      amount: quote.amount,
+      quotedAt: quote.quotedAt,
+      maxAgeSeconds: typeof quote.maxAgeSeconds === "number" ? quote.maxAgeSeconds : undefined,
+      fiat: fiat as ConfirmedQuote["fiat"],
+    };
   }
 
   /** Friendbot + USDC trustline for a custodial / passkey-rail G… — coalesces
@@ -1008,9 +1197,14 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     if (!bookingId) {
       return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
     }
+    const body = await c.req.json().catch(() => undefined);
+    const confirmedQuote = parseConfirmedQuote(body);
     try {
       await ensureCustodialReady(c.get("walletAddress"));
-      const result = await openLocalDeposit(db, bookingId, c.get("walletAddress"), localDepositDeps);
+      const result = await openLocalDeposit(db, bookingId, c.get("walletAddress"), {
+        ...localDepositDeps,
+        confirmedQuote,
+      });
       return c.json(result);
     } catch (error) {
       const mapped = localDepositErrorResponse(error, c);
@@ -1029,8 +1223,12 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     if (!signedXdr) {
       return c.json({ code: "invalid_request", message: "signedXdr is required." }, 400);
     }
+    const confirmedQuote = parseConfirmedQuote(body);
     try {
-      const result = await submitLocalDepositTrustline(db, bookingId, c.get("walletAddress"), signedXdr, localDepositDeps);
+      const result = await submitLocalDepositTrustline(db, bookingId, c.get("walletAddress"), signedXdr, {
+        ...localDepositDeps,
+        confirmedQuote,
+      });
       return c.json(result);
     } catch (error) {
       const mapped = localDepositErrorResponse(error, c);

@@ -35,6 +35,11 @@ import { resolveUsdcAsset } from "./usdc.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const PRICE_CACHE_TTL_MS = 60_000;
+/** A quote that carries no age of its own is honoured for one minute -- the
+ * same window as the price cache. A shorter age advertised by the anchor
+ * wins, so a screen holding an older quote knows to refresh before a client
+ * commits to an amount the anchor would no longer honour. */
+export const DEFAULT_QUOTE_MAX_AGE_SECONDS = 60;
 
 /** USDC on Stellar: 7 decimal places (AD-7's smallest unit end to end),
  * matching `frontend/src/lib/money.ts` and `escrow/trustless-work/
@@ -213,6 +218,56 @@ interface CachedPrice {
   fiatAmount: string;
   currency: string;
   quotedAtMs: number;
+  maxAgeSeconds: number;
+}
+
+/**
+ * How long a quote stays honoured, in seconds. The anchor may state its own
+ * age (SEP-38 price extensions use `age`/`max_age_seconds`, or an
+ * `expires_at`); anything missing or unusable falls back to 60 seconds.
+ */
+function readQuoteMaxAge(body: unknown, quotedAtSeconds: number): number {
+  if (typeof body !== "object" || body === null) return DEFAULT_QUOTE_MAX_AGE_SECONDS;
+  const record = body as Record<string, unknown>;
+  const candidates = [record.age, record.max_age_seconds, record.maxAgeSeconds];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+      return Math.min(candidate, PRICE_CACHE_TTL_MS / 1000);
+    }
+  }
+  if (typeof record.expires_at === "number" && Number.isFinite(record.expires_at)) {
+    const seconds = record.expires_at > 1e12 ? Math.floor(record.expires_at / 1000) : record.expires_at;
+    const age = seconds - quotedAtSeconds;
+    if (age > 0) return Math.min(age, PRICE_CACHE_TTL_MS / 1000);
+  }
+  if (typeof record.expires_at === "string") {
+    const ms = Date.parse(record.expires_at);
+    if (Number.isFinite(ms)) {
+      const age = Math.floor(ms / 1000) - quotedAtSeconds;
+      if (age > 0) return Math.min(age, PRICE_CACHE_TTL_MS / 1000);
+    }
+  }
+  return DEFAULT_QUOTE_MAX_AGE_SECONDS;
+}
+
+/**
+ * The one staleness rule shared by the backend cache and every client screen:
+ * a quote is stale once its own age has passed, counting its `quotedAt` (not
+ * when a screen happened to render it).
+ */
+export function isQuoteStale(
+  quote: Pick<IndicativePrice, "quotedAt" | "maxAgeSeconds">,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+): boolean {
+  return nowSeconds >= quote.quotedAt + quote.maxAgeSeconds;
+}
+
+/** A quote at this moment is never older than its own age. */
+export function quoteIsFresh(
+  quote: Pick<IndicativePrice, "quotedAt" | "maxAgeSeconds">,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+): boolean {
+  return !isQuoteStale(quote, nowSeconds);
 }
 
 const priceCache = new Map<string, CachedPrice>();
@@ -254,6 +309,11 @@ export interface IndicativePrice {
   /** Epoch seconds -- this codebase's own convention
    * (`services/booking.ts`'s `holdExpiresAt`), not a Date object. */
   quotedAt: number;
+  /** How long the quote is honoured, in seconds. `60` when the anchor did
+   * not state an age. */
+  maxAgeSeconds: number;
+  /** Epoch seconds at which the quote stops being honoured. */
+  expiresAt: number;
   /** Always `true`: the anchor's own SEP-38 price already carries its
    * 0.5% spread, so Pactly never adds or recomputes one of its own. */
   spreadApplied: true;
@@ -280,12 +340,15 @@ export async function fetchIndicativePrice(
   const roundedAmount = (amountUnits / CACHE_ROUNDING_UNIT) * CACHE_ROUNDING_UNIT;
   const cacheKey = `${cfg.sellAsset}|${cfg.buyAsset}|${roundedAmount.toString()}`;
   const cached = options.forceRefresh ? undefined : priceCache.get(cacheKey);
-  if (cached && nowMs - cached.quotedAtMs < PRICE_CACHE_TTL_MS) {
+  if (cached && nowMs - cached.quotedAtMs < Math.min(PRICE_CACHE_TTL_MS, cached.maxAgeSeconds * 1000)) {
+    const quotedAt = Math.floor(cached.quotedAtMs / 1000);
     return {
       amount,
       asset: cfg.assetCode,
       fiat: { amount: cached.fiatAmount, currency: cached.currency },
-      quotedAt: Math.floor(cached.quotedAtMs / 1000),
+      quotedAt,
+      maxAgeSeconds: cached.maxAgeSeconds,
+      expiresAt: quotedAt + cached.maxAgeSeconds,
       spreadApplied: true,
     };
   }
@@ -317,14 +380,28 @@ export async function fetchIndicativePrice(
     throw new AnchorQuoteUnavailableError(`${config.anchorHomeDomain}'s SEP-38 price response did not include buy_amount`);
   }
   const fiatAmount = buyAmount.trim();
+  const quotedAt = Math.floor(nowMs / 1000);
+  const maxAgeSeconds = readQuoteMaxAge(body, quotedAt);
 
-  priceCache.set(cacheKey, { fiatAmount, currency: cfg.currency, quotedAtMs: nowMs });
+  priceCache.set(cacheKey, { fiatAmount, currency: cfg.currency, quotedAtMs: nowMs, maxAgeSeconds });
 
   return {
     amount,
     asset: cfg.assetCode,
     fiat: { amount: fiatAmount, currency: cfg.currency },
-    quotedAt: Math.floor(nowMs / 1000),
+    quotedAt,
+    maxAgeSeconds,
+    expiresAt: quotedAt + maxAgeSeconds,
     spreadApplied: true,
   };
+}
+
+/** The client's "get a fresh quote now" seam. A screen left open calls this
+ * before it lets a client start a deposit when the quote it is showing has
+ * aged out; it never touches a hold or a booking. */
+export async function fetchFreshIndicativePrice(
+  params: FetchIndicativePriceParams,
+  options: FetchIndicativePriceOptions = {},
+): Promise<IndicativePrice> {
+  return fetchIndicativePrice(params, { ...options, forceRefresh: true });
 }

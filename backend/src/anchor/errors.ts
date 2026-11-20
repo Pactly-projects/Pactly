@@ -64,6 +64,26 @@ export class AnchorQuoteUnsupportedError extends Error {
   }
 }
 
+/** The quote a client is trying to confirm has aged past its own `age`, or
+ * names a different USDC amount than this booking's deposit. Both mean the
+ * amount on screen is no longer one the anchor would honour, so the deposit
+ * is blocked rather than submitted at a stale price. Maps to 409. */
+export class QuoteStaleError extends Error {
+  readonly details?: { quotedAt: number; expiresAt: number };
+  constructor(message = "That price is no longer current. Refresh it before continuing.", details?: { quotedAt: number; expiresAt: number }) {
+    super(message);
+    this.name = "QuoteStaleError";
+    this.details = details;
+  }
+}
+
+export class QuoteMismatchError extends Error {
+  constructor(message = "The confirmed price is for a different deposit amount.") {
+    super(message);
+    this.name = "QuoteMismatchError";
+  }
+}
+
 /** Story 2.4: the anchor's SEP-12 customer endpoint refused the wallet or
  * returned a status this backend cannot treat as approved. Maps to
  * `502 ANCHOR_KYC_FAILED`. */

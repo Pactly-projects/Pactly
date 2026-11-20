@@ -120,6 +120,27 @@ export const availabilitySlots = sqliteTable(
   (table) => [unique().on(table.providerProfileId, table.startsAt)],
 );
 
+/**
+ * Story (one-off closures): a provider's closed calendar dates. A closure is
+ * deliberately a row of its own rather than a rewrite of `availability_slots`:
+ * the shop's weekly/ repeating pattern stays exactly as it was, and only the
+ * closed day stops offering slots. `date` is the UTC calendar day in
+ * `YYYY-MM-DD` form, derived from a slot's `starts_at` with SQLite's
+ * `unixepoch`/`strftime` so the same date a client picked is the one filtered
+ * out everywhere slots are read. Closing a date never touches a booking.
+ */
+export const providerClosedDates = sqliteTable(
+  "provider_closed_dates",
+  {
+    providerProfileId: text("provider_profile_id")
+      .notNull()
+      .references(() => providerProfiles.id),
+    date: text("date").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.providerProfileId, table.date] })],
+);
+
 /** Booking states the contract can never produce. `escrowState` is `null`
  * until the event worker processes the booking's first event -- the row is
  * written before the chain call (AD-13's hold), so it exists before any

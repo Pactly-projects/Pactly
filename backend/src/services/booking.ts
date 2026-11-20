@@ -75,6 +75,7 @@ import {
   type EscrowActionKind,
 } from "../db/bookings.js";
 import { getSlotById, getSlotByProviderAndStart, listOpenSlotsInRange } from "../db/availabilitySlots.js";
+import { isDateClosed, utcDateFor } from "../db/closedDates.js";
 import { recordEscrowDisputeResolution } from "../db/escrowDisputeResolutions.js";
 import { getEscrowDisputeOpeningsForBookings, recordEscrowDisputeOpening } from "../db/escrowDisputeOpenings.js";
 import { getProviderProfileById, getProviderProfileByWallet } from "../db/providerProfiles.js";
@@ -316,6 +317,12 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
   }
   const slot = await getSlotByProviderAndStart(db, profile.id, input.slotStartsAt);
   if (!slot || slot.startsAt <= now) {
+    throw new SlotUnavailableError();
+  }
+  // A one-off closure hides the slot from every list; refuse a direct post of
+  // a stale start time too. The slot row itself is left alone, so reopening
+  // the date makes it bookable again with no pattern edit.
+  if (await isDateClosed(db, profile.id, utcDateFor(slot.startsAt))) {
     throw new SlotUnavailableError();
   }
 

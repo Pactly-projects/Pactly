@@ -24,6 +24,10 @@ export interface ProviderProfile {
   id: string;
   displayName: string;
   title: string;
+  /** The shop's description -- editable by an approved provider. */
+  bio: string;
+  /** Language names/codes, decoded from the backend's JSON column. */
+  languages: string[];
   category: Category;
   location: string;
   sessionFormat: string;
@@ -328,6 +332,11 @@ export interface QuoteResponse {
   };
   /** UTC epoch seconds. */
   quotedAt: number;
+  /** How long the anchor honours the quote, in seconds (60 when it did not
+   * state an age). A screen older than this must refresh before confirming. */
+  maxAgeSeconds: number;
+  /** UTC epoch seconds at which the quote stops being honoured. */
+  expiresAt: number;
   spreadApplied: true;
 }
 
@@ -429,3 +438,23 @@ export interface AdminApplicationsResponse {
 }
 
 export type ProviderApplicationOutcome = "approve" | "reject";
+
+// ---------------------------------------------------------------------------
+// One-off closures and approved-provider profile edits. Mirrors backend/src/
+// services/availability.ts and services/profile.ts.
+// ---------------------------------------------------------------------------
+
+/** `GET /me/provider/closed-dates` and the result of closing/reopening. */
+export interface ClosedDatesResponse {
+  closedDates: string[];
+}
+
+/** The only fields an approved shop may edit on its live profile. Price,
+ * deposit rate and category are deliberately absent. */
+export interface ProviderProfileEditInput {
+  title: string;
+  bio: string;
+  languages: string[];
+  sessionLengthMinutes: number;
+  location: string;
+}
