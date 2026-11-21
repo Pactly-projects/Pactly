@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import {
   fundDepositWithRetry,
@@ -7,6 +7,7 @@ import {
   lockDeposit,
   openLocalDeposit,
   requestAnchorChallenge,
+  rescheduleBooking,
   simulateLocalDeposit,
   submitLocalDepositTrustline,
   submitSignedTransaction,
@@ -98,6 +99,10 @@ export function BookingPage() {
   const [hold, setHold] = useState<HoldSlotResponse | undefined>();
   const [holdSecondsLeft, setHoldSecondsLeft] = useState<number | undefined>();
   const [holdEndedWhileIdle, setHoldEndedWhileIdle] = useState(false);
+  const [rescheduleBusy, setRescheduleBusy] = useState(false);
+  const [rescheduleError, setRescheduleError] = useState<string | undefined>();
+  const [rescheduleNotice, setRescheduleNotice] = useState<string | undefined>();
+  const navigate = useNavigate();
 
   const holdMutation = useHoldSlot();
 
@@ -131,8 +136,12 @@ export function BookingPage() {
   const formatTryAmount = useFormatTry();
 
   const isLocked = phase === "locked";
+  // Polled from the moment a hold exists, not only once the lock flow is
+  // running: a shop can close this date while the client is still deciding,
+  // and this is how the page learns the hold was released (no deposit was
+  // taken) without waiting for its own countdown to run out.
   const booking = useBooking(hold?.bookingId, session, {
-    enabled: phase === "reconciling" || phase === "reconciling-slow" || isLocked,
+    enabled: Boolean(hold?.bookingId && session),
   });
 
   const prefersReducedMotion = useMemo(
@@ -165,6 +174,23 @@ export function BookingPage() {
       engineRef.current = {};
     }
   }, [phase, hold, holdSecondsLeft]);
+
+  // The shop closed this whole date and the backend released this unpaid
+  // hold. Drop the local hold so the payment steps disappear and say
+  // plainly that no deposit was taken -- never leave the countdown implying
+  // the slot can still be paid for.
+  useEffect(() => {
+    if (!hold || booking.data?.holdReleasedReason !== "shop-closed-date") return;
+    setHold(undefined);
+    setLocalDeposit(undefined);
+    setLocalNotice(undefined);
+    setHoldEndedWhileIdle(false);
+    setHoldError({ message: "The shop closed this date. No deposit was taken." });
+    engineRef.current = {};
+    if (phase !== "locked") {
+      setPhase("idle");
+    }
+  }, [hold, booking.data?.holdReleasedReason, phase]);
 
   // Once the reconciler confirms `locked`, the seal is allowed to stamp --
   // never on a submit response alone (the spec's own "Always" rule).
@@ -576,9 +602,53 @@ export function BookingPage() {
     }
   }
 
+  async function handleReschedule(newStartsAt: number): Promise<void> {
+    if (!hold || !session) return;
+    setRescheduleBusy(true);
+    setRescheduleError(undefined);
+    setRescheduleNotice(undefined);
+    try {
+      const moved = await rescheduleBooking(hold.bookingId, newStartsAt, session);
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      // Keep the local hold in sync with the moved booking: same deposit and
+      // contract, only the appointment and its cancellation deadline change.
+      setHold((current) =>
+        current
+          ? {
+              ...current,
+              cancelDeadline: moved.cancelDeadline,
+              holdExpiresAt: moved.holdExpiresAt ?? current.holdExpiresAt,
+              deposit: moved.deposit,
+              balance: moved.balance,
+              price: moved.price,
+              provider: moved.provider,
+              freeCancellationEnded: moved.cancelDeadline <= nowSeconds ? true : undefined,
+            }
+          : current,
+      );
+      setRescheduleNotice(
+        `Moved to ${formatDeadline(newStartsAt)}. Your deposit stayed in the same escrow — no new contract.`,
+      );
+      // The page reads its appointment time from the URL, so move it there;
+      // the same booking (and its escrow) is then shown at the new slot.
+      navigate(`/book/${providerId}?slot=${newStartsAt}`, { replace: true });
+      void booking.refetch();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setRescheduleError(error instanceof ApiError ? error.message : "Connection dropped. Nothing changed.");
+    } finally {
+      setRescheduleBusy(false);
+    }
+  }
+
   const localReceived = localDeposit?.status === "received";
   // "Lock with Pactly" only ever appears once the bank transfer is in.
   const showLock = Boolean(hold) && localReceived;
+  const insideFreeWindow = booking.data !== undefined && Math.floor(Date.now() / 1000) < booking.data.cancelDeadline;
+  const rescheduleOptions = profile?.slots.filter((startsAt) => startsAt !== slotStartsAt).slice(0, 6) ?? [];
 
   if (!providerId || slotStartsAt === undefined) {
     return (
@@ -806,6 +876,37 @@ export function BookingPage() {
               <Seal />
               <p className="seal-wrap__title">You're set.</p>
               <p className="seal-wrap__subtitle">Your deposit is held in escrow by Trustless Work.</p>
+              {insideFreeWindow && rescheduleOptions.length > 0 && (
+                <div style={{ marginTop: "var(--space-4)" }}>
+                  <p className="seal-wrap__subtitle">
+                    Picked the wrong hour? Move this booking to another open time. Your deposit and contract stay exactly
+                    where they are.
+                  </p>
+                  <div className="slot-day__chips">
+                    {rescheduleOptions.map((startsAt) => (
+                      <button
+                        key={startsAt}
+                        type="button"
+                        className="slot-chip tabular-nums"
+                        disabled={rescheduleBusy}
+                        onClick={() => void handleReschedule(startsAt)}
+                      >
+                        {formatSlotDay(startsAt)} · {formatSlotTime(startsAt)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {rescheduleNotice && (
+                <p className="escrow-lane__notice" role="status">
+                  {rescheduleNotice}
+                </p>
+              )}
+              {rescheduleError && (
+                <p className="escrow-lane__notice escrow-lane__notice--alert" role="alert">
+                  {rescheduleError}
+                </p>
+              )}
               <Link to="/discover" className="button-ghost" style={{ marginTop: "var(--space-4)", textDecoration: "none" }}>
                 Back to Discover
               </Link>

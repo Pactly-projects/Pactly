@@ -226,6 +226,64 @@ export async function listOpenSlotsInRange(
 }
 
 /**
+ * Story: closing a date. Removes every future slot for `providerProfileId`
+ * that starts inside `[rangeStart, rangeEnd)`, leaving every other date
+ * exactly as it was -- concrete slots are this build's availability, so
+ * this is what "the weekly pattern stays as it was" means here. A slot an
+ * active booking still owns is left untouched (a funded booking the
+ * close-date action deliberately did not release); a slot referenced by an
+ * inactive booking is withdrawn rather than deleted, because the foreign
+ * key refuses the delete (same rule `replaceFutureSlots` follows).
+ *
+ * Synchronous end to end inside `db.transaction()`, like
+ * `replaceFutureSlots`. Returns how many slots were actually removed or
+ * withdrawn.
+ */
+export async function closeSlotsInRange(
+  db: Db,
+  providerProfileId: string,
+  rangeStart: number,
+  rangeEnd: number,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<number> {
+  let closed = 0;
+  db.transaction((tx) => {
+    const rows = tx
+      .select()
+      .from(availabilitySlots)
+      .where(
+        and(
+          eq(availabilitySlots.providerProfileId, providerProfileId),
+          gt(availabilitySlots.startsAt, now),
+          gte(availabilitySlots.startsAt, rangeStart),
+          lt(availabilitySlots.startsAt, rangeEnd),
+          isNull(availabilitySlots.withdrawnAt),
+        ),
+      )
+      .all();
+
+    for (const slot of rows) {
+      const bookingsForSlot = tx
+        .select({ escrowState: bookings.escrowState, holdExpiresAt: bookings.holdExpiresAt })
+        .from(bookings)
+        .where(eq(bookings.slotId, slot.id))
+        .all();
+      if (bookingsForSlot.some((booking) => isBookingActive(booking, now))) {
+        continue;
+      }
+
+      if (bookingsForSlot.length === 0) {
+        tx.delete(availabilitySlots).where(eq(availabilitySlots.id, slot.id)).run();
+      } else {
+        tx.update(availabilitySlots).set({ withdrawnAt: now }).where(eq(availabilitySlots.id, slot.id)).run();
+      }
+      closed += 1;
+    }
+  });
+  return closed;
+}
+
+/**
  * Replaces every *future* slot for `providerProfileId` with `slots`
  * (deduplicated and sorted) in one transaction, so a reader (or a
  * concurrent save) never observes a half-replaced table. Past slots

@@ -105,6 +105,7 @@ export function MyBookingsPage() {
               pendingAction={booking.pendingAction}
               balanceState={booking.balanceState}
               cancelDeadline={booking.cancelDeadline}
+              holdReleasedReason={booking.holdReleasedReason}
               contractId={booking.contractId}
               balancePaymentTxHash={booking.balancePaymentTxHash}
               session={session}

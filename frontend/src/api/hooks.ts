@@ -10,6 +10,7 @@ import type {
   BalancePaymentSubmitResponse,
   BookingView,
   CategoriesResponse,
+  CloseProviderDateResponse,
   DiscoverFiltersParams,
   DisputeOutcome,
   DisputeReason,
@@ -167,6 +168,22 @@ export function useUpdateProviderAvailability(session: Session | undefined) {
   });
 }
 
+/** `POST /me/provider/availability/close-date` -- closes one local calendar
+ * date: its unpaid holds are released (no deposit is taken from those
+ * clients) and its open slots are removed. A funded booking is never
+ * released; the response names it in `needsResolution`. */
+export function closeProviderDate(
+  date: string,
+  session: Session,
+  tzOffsetMinutes = new Date().getTimezoneOffset(),
+): Promise<CloseProviderDateResponse> {
+  return apiPost<CloseProviderDateResponse>(
+    "/me/provider/availability/close-date",
+    { date, tzOffsetMinutes },
+    session.token,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Story 3.4: the client booking flow. `BookingPage.tsx` drives lock/fund/
 // submit imperatively (each step waits on a wallet signature before the
@@ -196,6 +213,14 @@ export function useHoldSlot() {
   return useMutation({
     mutationFn: ({ token, ...input }: HoldSlotInput & { token: string }) => apiPost<HoldSlotResponse>("/bookings/hold", input, token),
   });
+}
+
+/** `POST /bookings/:id/reschedule` -- move a locked booking to another open
+ * slot of the same shop while inside its free-cancellation window. The
+ * escrow contract, amount and parties are untouched; no second escrow is
+ * deployed. */
+export function rescheduleBooking(bookingId: string, slotStartsAt: number, session: Session): Promise<BookingView> {
+  return apiPost<BookingView>(`/bookings/${bookingId}/reschedule`, { slotStartsAt }, session.token);
 }
 
 export function lockDeposit(bookingId: string, session: Session, rebuild = false): Promise<LockResponse> {

@@ -4,7 +4,7 @@
  * `../chain/event-worker.ts` -- which is what AD-1/AD-3 mean in practice:
  * nothing else may write `escrow_state`.
  */
-import { and, eq, gt, inArray, isNotNull, isNull, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 
 import type { Db, DbOrTx } from "./client.js";
 import {
@@ -152,6 +152,159 @@ export async function countPendingHoldsForWallet(db: Db, clientWalletAddress: st
     .from(bookings)
     .where(and(eq(bookings.clientWalletAddress, clientWalletAddress), isNull(bookings.escrowState), gt(bookings.holdExpiresAt, now)));
   return rows.length;
+}
+
+/** One booking touched by a shop closing a whole date -- either a hold
+ * released by that action, or a billed appointment the action deliberately
+ * left alone. */
+export interface DateHoldBooking {
+  bookingId: string;
+  slotStartsAt: number;
+  clientWalletAddress: string;
+  /** `null` for a released hold; the booking's state for one left alone. */
+  escrowState: EscrowState | null;
+}
+
+export interface ReleaseHoldsForDateResult {
+  /** Unpaid holds that were active on this date and are now released. */
+  released: DateHoldBooking[];
+  /** Bookings with a funded escrow on this date -- never released; the
+   * shop must resolve them itself. */
+  needsResolution: DateHoldBooking[];
+}
+
+/**
+ * Story: closing a date. Releases every still-active, unpaid hold whose slot
+ * starts inside `[rangeStart, rangeEnd)` for this provider: `holdExpiresAt`
+ * moves to `now` (the slot is therefore free for someone else), and
+ * `holdReleasedAt`/`holdReleaseReason` record why, so the client's own views
+ * can say "the shop closed this date" rather than a bare expiry.
+ *
+ * A booking whose `escrowState` is already set is *never* touched -- money
+ * has moved or the appointment happened; it comes back in
+ * `needsResolution` instead. Expired holds and refunded bookings are not
+ * "active" and are ignored. The whole read-and-release runs in one SQL
+ * transaction so a concurrent lock/fund can never slip between them.
+ */
+export async function releaseUnpaidHoldsForProviderDate(
+  db: Db,
+  providerProfileId: string,
+  rangeStart: number,
+  rangeEnd: number,
+  now: number,
+): Promise<ReleaseHoldsForDateResult> {
+  return db.transaction((tx) => {
+    const rows = tx
+      .select({ booking: bookings, slotStartsAt: availabilitySlots.startsAt })
+      .from(bookings)
+      .innerJoin(availabilitySlots, eq(bookings.slotId, availabilitySlots.id))
+      .where(
+        and(
+          eq(bookings.providerProfileId, providerProfileId),
+          gte(availabilitySlots.startsAt, rangeStart),
+          lt(availabilitySlots.startsAt, rangeEnd),
+        ),
+      )
+      .all();
+
+    const released: DateHoldBooking[] = [];
+    const needsResolution: DateHoldBooking[] = [];
+    for (const { booking, slotStartsAt } of rows) {
+      if (booking.escrowState !== null) {
+        // A funded (or already settled) booking is never released by a
+        // close-date action; only a live `locked` one needs the shop's
+        // attention, so terminal/settled rows are simply ignored.
+        if (booking.escrowState === "locked") {
+          needsResolution.push({
+            bookingId: booking.id,
+            slotStartsAt,
+            clientWalletAddress: booking.clientWalletAddress,
+            escrowState: booking.escrowState,
+          });
+        }
+        continue;
+      }
+      if (booking.holdExpiresAt !== null && booking.holdExpiresAt > now && booking.holdReleasedAt === null) {
+        released.push({
+          bookingId: booking.id,
+          slotStartsAt,
+          clientWalletAddress: booking.clientWalletAddress,
+          escrowState: booking.escrowState,
+        });
+      }
+    }
+
+    if (released.length > 0) {
+      tx.update(bookings)
+        .set({ holdExpiresAt: now, holdReleasedAt: now, holdReleaseReason: "shop-closed-date" })
+        .where(
+          and(
+            inArray(
+              bookings.id,
+              released.map((row) => row.bookingId),
+            ),
+            isNull(bookings.escrowState),
+          ),
+        )
+        .run();
+    }
+
+    return { released, needsResolution };
+  });
+}
+
+/**
+ * Story: reschedule a locked booking. Moves the booking's own `slot_id` to
+ * `newSlotId` and recomputes `cancel_deadline` for the new appointment, but
+ * touches nothing else -- the escrow contract id, deposit, balance, client
+ * and provider stay exactly as they were, so no second escrow is ever
+ * deployed.
+ *
+ * One synchronous transaction does both the availability check and the
+ * write: `false` means the target slot was taken between the caller's own
+ * read and here (or this booking is no longer the locked booking on
+ * `expectedSlotId`), and in that case nothing is written -- a taken slot is
+ * a refusal, never an overwrite. The "active" predicate is the same one
+ * `listOpenFutureSlots` uses: a non-refunded escrow, or a non-expired hold.
+ * The booking being moved is excluded from that check, so moving a booking
+ * to its own current slot is a harmless no-op (the service short-circuits
+ * it before getting here).
+ */
+export async function rescheduleBookingSlot(
+  db: Db,
+  bookingId: string,
+  expectedSlotId: string,
+  newSlotId: string,
+  newCancelDeadline: number,
+  now: number,
+): Promise<boolean> {
+  return db.transaction((tx) => {
+    const conflict = tx
+      .select({ id: bookings.id })
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.slotId, newSlotId),
+          ne(bookings.id, bookingId),
+          or(
+            and(isNotNull(bookings.escrowState), ne(bookings.escrowState, "refunded")),
+            and(isNull(bookings.escrowState), gt(bookings.holdExpiresAt, now)),
+          ),
+        ),
+      )
+      .limit(1)
+      .all();
+    if (conflict.length > 0) {
+      return false;
+    }
+
+    const result = tx
+      .update(bookings)
+      .set({ slotId: newSlotId, cancelDeadline: newCancelDeadline })
+      .where(and(eq(bookings.id, bookingId), eq(bookings.slotId, expectedSlotId), eq(bookings.escrowState, "locked")))
+      .run();
+    return result.changes > 0;
+  });
 }
 
 export async function getBookingById(db: Db, id: string): Promise<BookingRow | undefined> {

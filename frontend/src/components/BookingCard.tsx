@@ -33,6 +33,9 @@ export interface BookingCardProps {
   balanceState: BalanceState;
   /** UTC epoch seconds. */
   cancelDeadline: number;
+  /** `"shop-closed-date"` when the shop closed this date and released this
+   * unpaid hold -- shown as "no deposit was taken". */
+  holdReleasedReason?: "shop-closed-date" | null;
   /** The explorer link (AC4) appears only when this exists. */
   contractId: string | null;
   /** Story 3.7: the on-chain transaction hash once the balance was paid
@@ -87,6 +90,7 @@ export function BookingCard({
   pendingAction,
   balanceState,
   cancelDeadline,
+  holdReleasedReason,
   contractId,
   balancePaymentTxHash,
   session,
@@ -107,6 +111,12 @@ export function BookingCard({
       <p className="booking-card__appointment">
         {slotStartsAt !== null ? `${formatSlotDay(slotStartsAt)} · ${formatSlotTime(slotStartsAt)}` : "No appointment time on record"}
       </p>
+
+      {holdReleasedReason === "shop-closed-date" && (
+        <p className="booking-card__notice" role="status">
+          The shop closed this date. No deposit was taken.
+        </p>
+      )}
 
       <dl className="booking-card__amounts">
         <div className="booking-card__amount-row">
