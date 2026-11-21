@@ -314,6 +314,11 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
   if (!profile || !profile.isApproved) {
     throw new ProviderNotFoundError();
   }
+  // Story 3.3: reject if the client wallet is the same as the provider wallet
+  // (a shop cannot book its own slot).
+  if (input.clientWalletAddress === profile.walletAddress) {
+    throw new SlotTakenError([]);
+  }
   const slot = await getSlotByProviderAndStart(db, profile.id, input.slotStartsAt);
   if (!slot || slot.startsAt <= now) {
     throw new SlotUnavailableError();

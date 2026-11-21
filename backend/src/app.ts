@@ -761,6 +761,13 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
         return c.json({ code: "TOO_MANY_HOLDS", message: error.message }, 429);
       }
       if (error instanceof SlotTakenError) {
+        if (error.sameDaySlots.length === 0) {
+          // Self-booking attempt (client wallet == provider wallet)
+          return c.json(
+            { code: "SLOT_TAKEN", message: "You cannot book a slot for yourself." },
+            409,
+          );
+        }
         return c.json(
           { code: "SLOT_TAKEN", message: error.message, details: { sameDaySlots: error.sameDaySlots } },
           409,
