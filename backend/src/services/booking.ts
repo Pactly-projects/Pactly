@@ -1323,6 +1323,20 @@ export async function markBalancePaidCash(db: Db, bookingId: string, providerWal
 // ---------------------------------------------------------------------------
 
 /**
+ * Story 3.6: mark a booking as a no-show. The provider may only do this
+ * after the appointment time has passed (i.e. current time is past
+ * cancelDeadline). This does not move the deposit -- resolution stays on
+ * the existing admin path. */
+export async function markNoShow(db: Db, bookingId: string, providerWalletAddress: string): Promise<void> {
+  const booking = await getBookingForProvider(db, bookingId, providerWalletAddress);
+  const now = Math.floor(Date.now() / 1000);
+  // No-show can only be marked after the appointment time (past cancelDeadline)
+  if (now <= booking.cancelDeadline) {
+    throw new BookingEscrowStateError("No-show can only be marked after the appointment time has passed. Use the cancellation path before then.");
+  }
+}
+
+/**
  * The one place `lock`/`fund`/`submit`/`GET /bookings/:id` all resolve
  * "does this booking exist, and does the caller's own wallet own it" --
  * both a missing booking and an owner mismatch throw the identical

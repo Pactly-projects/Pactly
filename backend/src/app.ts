@@ -98,6 +98,7 @@ import {
   listOpenDisputes,
   lockDeposit,
   markBalancePaidCash,
+  markNoShow,
   openDispute,
   releaseDeposit,
   resolveBookingDispute,
@@ -1272,6 +1273,28 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       if (error instanceof EscrowApiError || error instanceof EscrowRequestError || error instanceof EscrowConfigError) {
         const response = escrowErrorResponse(error);
         return c.json({ code: response.code, message: response.message }, response.status);
+      }
+      throw error;
+    }
+  });
+
+  /** Story 3.6: mark a booking as a no-show. The shop (provider) may only
+   * do this after the appointment time has passed. Before the cancellation
+   * deadline, the existing cancel path remains in effect. */
+  app.post("/bookings/:id/no-show", requirePactlyAuth, async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+    }
+    try {
+      const result = await markNoShow(db, bookingId, c.get("walletAddress"));
+      return c.json({ ok: true });
+    } catch (error) {
+      if (error instanceof BookingNotFoundError) {
+        return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
+      }
+      if (error instanceof BookingEscrowStateError) {
+        return c.json({ code: "BOOKING_STATE", message: error.message }, 409);
       }
       throw error;
     }
