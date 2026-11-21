@@ -113,6 +113,8 @@ import { PaymentFailedError, PaymentUnavailableError } from "./payments/errors.j
 import type { SubmitPaymentDeps } from "./payments/stellar.js";
 import { config } from "./config.js";
 import { DISPUTE_OUTCOMES, type DisputeOutcome, type DisputeReason } from "./db/schema.js";
+import { eq } from "drizzle-orm";
+import { bookings } from "./db/schema.js";
 import { getBookingById } from "./db/bookings.js";
 import {
   AmountOutOfRangeError,
@@ -1437,6 +1439,40 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       }
       if (error instanceof BookingEscrowStateError) {
         return c.json({ code: "BOOKING_STATE", message: error.message }, 409);
+      }
+      throw error;
+    }
+  });
+
+  /** Story 3.6: retry a failed anchor deposit without starting a new hold. */
+  app.post("/bookings/:id/retry-local-deposit", requirePactlyAuth, async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+    }
+    try {
+      const walletAddress = c.get("walletAddress");
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const booking = await getBookingForClient(db, bookingId, walletAddress);
+      // Check if the hold has expired - if so, don't retry
+      if (booking.holdExpiresAt !== null && booking.holdExpiresAt <= nowSeconds) {
+        return c.json({ code: "HOLD_EXPIRED", message: "This hold has expired. Please start a new hold." }, 409);
+      }
+      // Reset the anchor deposit fields so openLocalDeposit can start fresh
+      // but reuse the existing hold
+      await db.update(bookings).set({
+        anchorDepositId: null,
+        anchorDepositStatus: null,
+        anchorDepositMoreInfoUrl: null,
+        anchorDepositBankDetails: null,
+        anchorDepositExpiresAt: null,
+        anchorDepositAmountIn: null,
+        anchorDepositUpdatedAt: booking.anchorDepositUpdatedAt,
+      }).where(eq(bookings.id, bookingId));
+      return c.json({ ok: true });
+    } catch (error) {
+      if (error instanceof BookingNotFoundError) {
+        return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
       }
       throw error;
     }
