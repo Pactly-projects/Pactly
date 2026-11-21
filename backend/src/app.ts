@@ -113,7 +113,7 @@ import { PaymentFailedError, PaymentUnavailableError } from "./payments/errors.j
 import type { SubmitPaymentDeps } from "./payments/stellar.js";
 import { config } from "./config.js";
 import { DISPUTE_OUTCOMES, type DisputeOutcome, type DisputeReason } from "./db/schema.js";
-import { getBookingById } from "./db/bookings.js";
+import { getBookingById, setClientNote, getClientNote } from "./db/bookings.js";
 import {
   AmountOutOfRangeError,
   AnchorAuthError,
@@ -1272,6 +1272,47 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       if (error instanceof EscrowApiError || error instanceof EscrowRequestError || error instanceof EscrowConfigError) {
         const response = escrowErrorResponse(error);
         return c.json({ code: response.code, message: response.message }, response.status);
+      }
+      throw error;
+    }
+  });
+
+  /** Story 3.5: the client's private note on their booking. */
+  app.get("/bookings/:id/note", requirePactlyAuth, async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+    }
+    try {
+      const walletAddress = c.get("walletAddress");
+      const note = await getClientNote(db, bookingId);
+      // Check ownership: only the client who owns this booking can read the note
+      const booking = await getBookingForClient(db, bookingId, walletAddress);
+      return c.json({ note });
+    } catch (error) {
+      if (error instanceof BookingNotFoundError) {
+        return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
+      }
+      throw error;
+    }
+  });
+
+  app.put("/bookings/:id/note", requirePactlyAuth, async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+    }
+    try {
+      const body = await c.req.json().catch(() => undefined);
+      const note = typeof body?.note === "string" ? body.note : "";
+      const walletAddress = c.get("walletAddress");
+      // Check ownership: only the client who owns this booking can write the note
+      const booking = await getBookingForClient(db, bookingId, walletAddress);
+      await setClientNote(db, bookingId, note);
+      return c.json({ ok: true });
+    } catch (error) {
+      if (error instanceof BookingNotFoundError) {
+        return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
       }
       throw error;
     }

@@ -673,3 +673,16 @@ export async function extendHoldExpiresAt(db: Db, bookingId: string, holdExpires
 export async function setAnchorTrustlineTxHash(db: Db, bookingId: string, txHash: string): Promise<void> {
   await db.update(bookings).set({ anchorTrustlineTxHash: txHash }).where(eq(bookings.id, bookingId));
 }
+
+/** Story 3.5: set the client's private note on a booking.
+ *  An empty string clears the previous note.
+ *  Throws if the booking does not exist. */
+export async function setClientNote(db: Db, bookingId: string, note: string): Promise<void> {
+  await db.update(bookings).set({ clientNote: note }).where(eq(bookings.id, bookingId));
+}
+
+/** Story 3.5: get the client's private note on a booking, or undefined if none. */
+export async function getClientNote(db: Db, bookingId: string): Promise<string | undefined> {
+  const row = await db.select({ clientNote: bookings.clientNote }).from(bookings).where(eq(bookings.id, bookingId)).limit(1);
+  return row[0]?.clientNote ?? undefined;
+}

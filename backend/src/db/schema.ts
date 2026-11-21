@@ -268,6 +268,11 @@ export const bookings = sqliteTable("bookings", {
    * `submitSignedTransaction` can match against every action's hash from
    * this one row, without a second query. */
   escrowResolveTxHash: text("escrow_resolve_tx_hash"),
+  /** Story 3.5: a private note the client can leave on their booking (up to 500 chars).
+   * The shop sees this on the booking; the public profile and discovery do not.
+   * Another client cannot read it. The client can replace it until the booking is
+   * released or cancelled. An empty note clears the previous note. */
+  clientNote: text("client_note"),
   /**
    * Story 3.6 (review round): one "submitted at" timestamp per action kind
    * (`complete`/`approve`/`release`/`dispute`/`resolve`), set only once a
