@@ -110,6 +110,8 @@ export function MyBookingsPage() {
               session={session}
               onActionSubmitted={() => bookingsQuery.refetch()}
               onUnauthorized={handleSignOut}
+              review={booking.review}
+              onReviewSubmitted={() => bookingsQuery.refetch()}
               continueHref={
                 booking.escrowState === null && booking.slotStartsAt !== null
                   ? `/book/${booking.provider.id}?slot=${booking.slotStartsAt}`
@@ -144,6 +146,7 @@ export function MyBookingsPage() {
                 session={session}
                 onActionSubmitted={() => bookingsQuery.refetch()}
                 onUnauthorized={handleSignOut}
+                review={booking.review}
               />
             ))}
           </div>

@@ -20,7 +20,7 @@
  * relays an envelope the caller's own wallet already signed
  * (`submitBalancePaymentTransaction`).
  */
-import { Account, Asset, BASE_FEE, Operation, Transaction, TransactionBuilder, rpc } from "@stellar/stellar-sdk";
+import { Account, Asset, BASE_FEE, Memo, Operation, Transaction, TransactionBuilder, rpc } from "@stellar/stellar-sdk";
 
 import { config } from "../config.js";
 import { PaymentFailedError, PaymentUnavailableError } from "./errors.js";
@@ -79,6 +79,9 @@ export interface BuildBalancePaymentInput {
   assetIssuer: string;
   /** Integer string, smallest unit (AD-7); must be a positive integer. */
   amount: string;
+  /** Issue #1: the anchor's own memo for a SEP-6 cash-out payment. Omitted
+   * (never an empty memo) for every other payment. */
+  memo?: { type: "id" | "text"; value: string };
 }
 
 export interface BuildBalancePaymentResult {
@@ -111,10 +114,13 @@ export async function buildBalancePaymentTransaction(
   const amount = smallestUnitToStellarAmount(input.amount);
   const sourceAccount = await getAccount(input.sourceAddress);
   const asset = new Asset(input.assetCode, input.assetIssuer);
-  const tx = new TransactionBuilder(sourceAccount, { fee: BASE_FEE, networkPassphrase: config.stellarNetworkPassphrase })
+  const builder = new TransactionBuilder(sourceAccount, { fee: BASE_FEE, networkPassphrase: config.stellarNetworkPassphrase })
     .addOperation(Operation.payment({ destination: input.destinationAddress, asset, amount }))
-    .setTimeout(PAYMENT_TIMEOUT_SECONDS)
-    .build();
+    .setTimeout(PAYMENT_TIMEOUT_SECONDS);
+  if (input.memo && input.memo.value !== "") {
+    builder.addMemo(input.memo.type === "text" ? Memo.text(input.memo.value) : Memo.id(input.memo.value));
+  }
+  const tx = builder.build();
   // `Transaction.hash()` returns a `Uint8Array`, not a Node `Buffer` -- wrap
   // it to get `.toString("hex")` (mirrors `services/booking.ts`'s own
   // `computeSignedTransactionHash`).

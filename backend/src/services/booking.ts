@@ -64,6 +64,7 @@ import {
   markBalancePaidCashIfUnpaid,
   markBalancePaidPlatform,
   recordDeploySubmission,
+  recordProviderCancellationCountedSync,
   setEscrowActionSubmittedAt,
   setBalancePaymentBuiltHash,
   setEscrowActionTxHash,
@@ -78,6 +79,7 @@ import { getSlotById, getSlotByProviderAndStart, listOpenSlotsInRange } from "..
 import { recordEscrowDisputeResolution } from "../db/escrowDisputeResolutions.js";
 import { getEscrowDisputeOpeningsForBookings, recordEscrowDisputeOpening } from "../db/escrowDisputeOpenings.js";
 import { getProviderProfileById, getProviderProfileByWallet } from "../db/providerProfiles.js";
+import { getReviewByBookingId, getReviewsForBookings, toReviewView, type ReviewView } from "../db/reviews.js";
 import { computeDepositAmount, NotAProviderError, ProviderNotFoundError } from "./profile.js";
 import { resolveUsdcAsset, type ResolveUsdcAssetOptions, type UsdcAsset } from "../anchor/usdc.js";
 import {
@@ -1427,6 +1429,10 @@ export interface BookingView {
    * no transaction to point at). Drives the balance row's own Stellar
    * Expert link, per the spec's own "Always" rule. */
   balancePaymentTxHash: string | null;
+  /** Issue #3: this booking's own review, once the client left one. `null`
+   * means "not reviewed" (or not reviewable yet), never a placeholder
+   * rating. */
+  review: ReviewView | null;
 }
 
 /** `GET /bookings/:id`'s own response shape: the booking's amounts (each
@@ -1442,6 +1448,7 @@ export async function getBookingView(db: Db, bookingId: string, walletAddress: s
   const lifecycle = (await getEscrowLifecycle(db, bookingId)) ?? {};
   const slot = booking.slotId ? await getSlotById(db, booking.slotId) : undefined;
   const slotStartsAt = slot?.startsAt ?? null;
+  const review = await getReviewByBookingId(db, bookingId);
   return {
     id: booking.id,
     escrowState: booking.escrowState,
@@ -1458,6 +1465,7 @@ export async function getBookingView(db: Db, bookingId: string, walletAddress: s
       ? { id: profile.id, displayName: profile.displayName, title: profile.title }
       : { id: booking.providerProfileId, displayName: "", title: "" },
     balancePaymentTxHash: booking.balancePaymentTxHash,
+    review: review ? toReviewView(review) : null,
   };
 }
 
@@ -1621,6 +1629,17 @@ export async function submitSignedTransaction(
         txHash: hash,
         openedAt: now,
       });
+      // Issue #2: the provider's cancellation counter moves only when the
+      // provider is the cancelling party -- the reason the dispute was opened
+      // under is what names that, never who pressed the button (either side
+      // may report a provider cancellation). The booking-level marker makes
+      // this once-only. A client cancel, a no-show, a plain disagreement and
+      // every refund/release path leave it untouched.
+      if (booking.pendingDisputeReason === "provider-cancel") {
+        db.transaction((tx) => {
+          recordProviderCancellationCountedSync(tx, bookingId, booking.providerProfileId, now);
+        });
+      }
     }
     await setEscrowActionSubmittedAt(db, bookingId, "dispute", now);
   } else if (match.kind === "complete" || match.kind === "approve" || match.kind === "release" || match.kind === "resolve") {
@@ -1709,6 +1728,8 @@ export interface BookingListItemBase {
    * (Story 3.4's own double-sale note: an expired hold's escrow may still
    * reconcile later, so it must stay traceable from this list too). */
   isExpiredHold: boolean;
+  /** Issue #3: this booking's own review, `null` when not reviewed. */
+  review: ReviewView | null;
 }
 
 export interface ClientBookingListItem extends BookingListItemBase {
@@ -1746,6 +1767,7 @@ function toBookingListItemBase(
   slotStartsAt: number | null,
   lifecycle: EscrowLifecycle | undefined,
   now: number,
+  review: ReviewView | undefined,
 ): BookingListItemBase {
   return {
     id: booking.id,
@@ -1762,6 +1784,7 @@ function toBookingListItemBase(
     contractId: booking.escrowContractId,
     holdExpiresAt: booking.holdExpiresAt,
     isExpiredHold: isExpiredHoldRow(booking, now),
+    review: review ? toReviewView(review) : null,
   };
 }
 
@@ -1785,6 +1808,10 @@ export async function listBookingsForClient(
     db,
     rows.map((row) => row.booking),
   );
+  const reviewByBooking = await getReviewsForBookings(
+    db,
+    rows.map((row) => row.booking.id),
+  );
   const providerIds = [...new Set(rows.map((row) => row.booking.providerProfileId))];
   const profiles = await Promise.all(providerIds.map((id) => getProviderProfileById(db, id)));
   const profileById = new Map(profiles.filter((profile): profile is NonNullable<typeof profile> => Boolean(profile)).map((profile) => [profile.id, profile]));
@@ -1792,7 +1819,7 @@ export async function listBookingsForClient(
   const items: ClientBookingListItem[] = rows.map(({ booking, slotStartsAt }) => {
     const profile = profileById.get(booking.providerProfileId);
     return {
-      ...toBookingListItemBase(booking, slotStartsAt, lifecycleByBooking.get(booking.id), now),
+      ...toBookingListItemBase(booking, slotStartsAt, lifecycleByBooking.get(booking.id), now, reviewByBooking.get(booking.id)),
       provider: profile
         ? { id: profile.id, displayName: profile.displayName, title: profile.title }
         : { id: booking.providerProfileId, displayName: "", title: "" },
@@ -1827,8 +1854,12 @@ export async function listBookingsForProvider(
     rows.map((row) => row.booking),
   );
 
+  const reviewByBooking = await getReviewsForBookings(
+    db,
+    rows.map((row) => row.booking.id),
+  );
   const items: ProviderBookingListItem[] = rows.map(({ booking, slotStartsAt }) => ({
-    ...toBookingListItemBase(booking, slotStartsAt, lifecycleByBooking.get(booking.id), now),
+    ...toBookingListItemBase(booking, slotStartsAt, lifecycleByBooking.get(booking.id), now, reviewByBooking.get(booking.id)),
     clientWalletAddress: booking.clientWalletAddress,
   }));
   items.sort((a, b) => compareByAppointmentDate(a, b, now));

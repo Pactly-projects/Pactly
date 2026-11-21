@@ -80,10 +80,14 @@ export const providerProfiles = sqliteTable("provider_profiles", {
   depositRateBps: integer("deposit_rate_bps").notNull(),
   cancellationWindowHours: integer("cancellation_window_hours").notNull(),
   isApproved: integer("is_approved", { mode: "boolean" }).notNull().default(false),
-  /** Increases only on the chain's `released` event (FR20); never written
-   * by hand outside the event worker's own bookkeeping. */
+  /** Increases only when a booking's deposit is reconciled as released
+   * (FR20); never written by hand outside the reconciler/event worker's own
+   * bookkeeping. The seeder may write an explicit demo value -- see
+   * `seed/demoData.ts`'s own note. */
   verifiedSessionCount: integer("verified_session_count").notNull().default(0),
-  /** Increases only on the chain's `cancelled` event (FR23). */
+  /** Increases only when the provider is the party who cancelled (FR23).
+   * A client cancelling, a refund, or a dispute with any other reason never
+   * touches it. */
   providerCancellationCount: integer("provider_cancellation_count").notNull().default(0),
   createdAt: integer("created_at").notNull(),
 });
@@ -332,6 +336,19 @@ export const bookings = sqliteTable("bookings", {
    * USDC trustline -- submit matches against this the same way 3.7's
    * balance payment does. */
   anchorTrustlineTxHash: text("anchor_trustline_tx_hash"),
+  /**
+   * Story 4.3/issue #2: set exactly once, in the same transaction that
+   * writes `escrowState = "released"`, and only when the provider's
+   * verified-session count was incremented for this booking. Reading this
+   * nullity (rather than trusting the dedupe ledger alone) is what makes a
+   * replayed or twice-reconciled release count once, independently of which
+   * reconciliation path observed it. UTC epoch seconds.
+   */
+  verifiedSessionCountedAt: integer("verified_session_counted_at"),
+  /** Issue #2: the same once-only marker for the provider-cancellation
+   * count -- set when a dispute whose reason is `provider-cancel` is first
+   * recorded. A client's cancelling never sets it. */
+  providerCancellationCountedAt: integer("provider_cancellation_counted_at"),
 
   createdAt: integer("created_at").notNull(),
 });
@@ -349,6 +366,46 @@ export const reviews = sqliteTable("reviews", {
   rating: integer("rating").notNull(),
   comment: text("comment").notNull().default(""),
   createdAt: integer("created_at").notNull(),
+});
+
+/**
+ * Issue #1 (Story 2.3): one row per SEP-6 cash-out a provider starts. The
+ * anchor's own transaction id is the external identity; Pactly's `id` is
+ * what the panel addresses. `treasuryAccount`/`memo` are the anchor's
+ * returned destinations for the USDC payment; `paymentBuiltHash` is the
+ * hash-binding record `submit` matches a signed envelope against, the same
+ * rule Story 3.7's balance payment already follows. `status` is Pactly's
+ * own plain-language state (see `services/cashOut.ts`); `anchorStatus`
+ * keeps the anchor's raw value for polling and support.
+ */
+export const CASH_OUT_STATES = ["awaiting_signature", "waiting", "sent", "paid_out", "failed"] as const;
+export type CashOutState = (typeof CASH_OUT_STATES)[number];
+
+export const cashOuts = sqliteTable("cash_outs", {
+  id: text("id").primaryKey(),
+  providerWalletAddress: text("provider_wallet_address").notNull(),
+  anchorTransactionId: text("anchor_transaction_id").notNull().unique(),
+  treasuryAccount: text("treasury_account").notNull(),
+  memo: text("memo").notNull(),
+  memoType: text("memo_type").notNull().default("id"),
+  /** Integer string, smallest unit (AD-7) -- the USDC the provider sends. */
+  amount: text("amount").notNull(),
+  /** Decimal string, local-currency amount the anchor receives (2dp). */
+  fiatAmount: text("fiat_amount").notNull(),
+  fiatCurrency: text("fiat_currency").notNull(),
+  /** The anchor's raw status, kept exactly as received. */
+  anchorStatus: text("anchor_status").notNull(),
+  status: text("status", { enum: CASH_OUT_STATES }).notNull().default("awaiting_signature"),
+  /** The anchor's own plain reason once it reports `error`, never a raw body. */
+  reason: text("reason"),
+  moreInfoUrl: text("more_info_url"),
+  /** Hash of the unsigned payment built for this cash-out (submit binding). */
+  paymentBuiltHash: text("payment_built_hash"),
+  paymentTxHash: text("payment_tx_hash"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  /** UTC epoch seconds -- set once the payment is confirmed on chain. */
+  sentAt: integer("sent_at"),
 });
 
 /**

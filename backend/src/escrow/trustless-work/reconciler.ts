@@ -52,6 +52,7 @@ import { config } from "../../config.js";
 import {
   getBookingById,
   getReconcilableBookings,
+  recordVerifiedSessionCountedSync,
   updateEscrowStateIfNotTerminalSync,
   TERMINAL_ESCROW_STATES,
   type ReconcilableBooking,
@@ -447,6 +448,14 @@ export async function processEscrowRow(
       // moved this booking to a terminal state); this is what actually
       // prevents a regression, not that snapshot.
       const wrote = inserted && updateEscrowState(tx, booking.id, toApply.escrowState);
+      // Issue #2: a chain-confirmed release is the one event that moves a
+      // provider's verified-session count. It sits in this same transaction
+      // (and behind its own booking-level marker) so a replay, or a second
+      // reconciler observing the same release, can never count twice, and a
+      // state write that declines (booking already terminal) never counts.
+      if (wrote && toApply.escrowState === "released") {
+        recordVerifiedSessionCountedSync(tx, booking.id, booking.providerProfileId, Math.floor(Date.now() / 1000));
+      }
       return { inserted, wrote };
     });
     outcome = !result.inserted ? "duplicate" : result.wrote ? "applied" : "none";

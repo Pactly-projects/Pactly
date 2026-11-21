@@ -338,6 +338,13 @@ export function DiscoverPage() {
                   onClearAvailability={() => setAvailability(undefined)}
                   browseLabel={browseLabel}
                   onBrowseWider={handleBrowseWider}
+                  suggestions={providersQuery.data?.suggestions}
+                  onBrowseCategory={(slug) =>
+                    updateParams((params) => {
+                      params.set("category", slug);
+                      params.delete("q");
+                    })
+                  }
                 />
               ) : (
                 <>

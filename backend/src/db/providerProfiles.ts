@@ -23,6 +23,11 @@ export interface NewProviderProfile {
   depositRateBps: number;
   cancellationWindowHours: number;
   isApproved?: boolean;
+  /** Issue #2: seed-only. A real profile starts at 0 and only ever moves
+   * through the reconciler's own once-only writes -- the demo seeder is the
+   * one caller allowed to set an explicit starting value. */
+  verifiedSessionCount?: number;
+  providerCancellationCount?: number;
   createdAt: number;
 }
 
@@ -42,6 +47,8 @@ export async function insertProviderProfile(db: Db, values: NewProviderProfile):
     depositRateBps: values.depositRateBps,
     cancellationWindowHours: values.cancellationWindowHours,
     isApproved: values.isApproved ?? false,
+    verifiedSessionCount: values.verifiedSessionCount ?? 0,
+    providerCancellationCount: values.providerCancellationCount ?? 0,
     createdAt: values.createdAt,
   });
 }

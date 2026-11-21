@@ -87,6 +87,26 @@ const STATEMENTS: readonly string[] = [
     comment TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS cash_outs (
+    id TEXT PRIMARY KEY,
+    provider_wallet_address TEXT NOT NULL,
+    anchor_transaction_id TEXT NOT NULL UNIQUE,
+    treasury_account TEXT NOT NULL,
+    memo TEXT NOT NULL,
+    memo_type TEXT NOT NULL DEFAULT 'id',
+    amount TEXT NOT NULL,
+    fiat_amount TEXT NOT NULL,
+    fiat_currency TEXT NOT NULL,
+    anchor_status TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'awaiting_signature',
+    reason TEXT,
+    more_info_url TEXT,
+    payment_built_hash TEXT,
+    payment_tx_hash TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    sent_at INTEGER
+  )`,
   `CREATE TABLE IF NOT EXISTS used_challenge_nonces (
     nonce TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL,
@@ -327,4 +347,15 @@ export function runMigrations(sqlite: Database): void {
   if (!hasColumn(sqlite, "bookings", "anchor_trustline_tx_hash")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN anchor_trustline_tx_hash TEXT`);
   }
+
+  // Issue #2: once-only markers for the two trust counters. A database
+  // created before this story has existing bookings, so both are nullable
+  // and stay null until their own event is first observed.
+  if (!hasColumn(sqlite, "bookings", "verified_session_counted_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN verified_session_counted_at INTEGER`);
+  }
+  if (!hasColumn(sqlite, "bookings", "provider_cancellation_counted_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN provider_cancellation_counted_at INTEGER`);
+  }
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_cash_outs_provider ON cash_outs(provider_wallet_address)`);
 }

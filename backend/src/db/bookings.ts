@@ -673,3 +673,63 @@ export async function extendHoldExpiresAt(db: Db, bookingId: string, holdExpires
 export async function setAnchorTrustlineTxHash(db: Db, bookingId: string, txHash: string): Promise<void> {
   await db.update(bookings).set({ anchorTrustlineTxHash: txHash }).where(eq(bookings.id, bookingId));
 }
+
+// ---------------------------------------------------------------------------
+// Issue #2: the two trust counters. Both are synchronous and meant to be
+// called inside the same `db.transaction()` as the state write that causes
+// them -- the booking-level marker makes the increment once-only even if the
+// same transition is observed twice (a replay, a second reconciler, or the
+// legacy event worker and the Trustless Work reconciler both seeing it).
+// ---------------------------------------------------------------------------
+
+/** Increments `provider_profiles.verified_session_count` for `bookingId` at
+ * most once, and returns whether it did. The `WHERE ... IS NULL` on the
+ * marker is what enforces "the same booking cannot increase the count
+ * twice" independently of any dedupe ledger. */
+export function recordVerifiedSessionCountedSync(
+  db: DbOrTx,
+  bookingId: string,
+  providerProfileId: string,
+  now: number,
+): boolean {
+  const marked = db
+    .update(bookings)
+    .set({ verifiedSessionCountedAt: now })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.verifiedSessionCountedAt)))
+    .run();
+  if (marked.changes === 0) {
+    return false;
+  }
+  db.update(providerProfiles)
+    .set({ verifiedSessionCount: sql`${providerProfiles.verifiedSessionCount} + 1` })
+    .where(eq(providerProfiles.id, providerProfileId))
+    .run();
+  return true;
+}
+
+/** The provider-cancellation sibling of
+ * {@link recordVerifiedSessionCountedSync}: increments
+ * `provider_profiles.provider_cancellation_count` at most once per booking.
+ * Only a dispute whose reason is `provider-cancel` ever calls this; a client
+ * cancelling, a no-show, a plain disagreement, a refund or a release never
+ * does. */
+export function recordProviderCancellationCountedSync(
+  db: DbOrTx,
+  bookingId: string,
+  providerProfileId: string,
+  now: number,
+): boolean {
+  const marked = db
+    .update(bookings)
+    .set({ providerCancellationCountedAt: now })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.providerCancellationCountedAt)))
+    .run();
+  if (marked.changes === 0) {
+    return false;
+  }
+  db.update(providerProfiles)
+    .set({ providerCancellationCount: sql`${providerProfiles.providerCancellationCount} + 1` })
+    .where(eq(providerProfiles.id, providerProfileId))
+    .run();
+  return true;
+}

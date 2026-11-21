@@ -87,6 +87,7 @@ export function BookingsPage() {
         actions={
           <>
             <Link to="/panel/availability">Availability &amp; rules</Link>
+            <Link to="/panel/cash-out">Cash out</Link>
             <button type="button" className="button-ghost" onClick={handleSignOut}>
               Sign out
             </button>

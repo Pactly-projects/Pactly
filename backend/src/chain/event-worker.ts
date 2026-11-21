@@ -10,7 +10,7 @@
  * resumes from where it left off rather than from the first ledger.
  */
 import { getCursor, setCursor } from "../db/cursor.js";
-import { getBookingById, updateEscrowStateSync } from "../db/bookings.js";
+import { getBookingById, recordVerifiedSessionCountedSync, updateEscrowStateSync } from "../db/bookings.js";
 import { insertProcessedEventIfNewSync } from "../db/processedEvents.js";
 import type { Db, DbOrTx } from "../db/client.js";
 import type { EscrowState } from "../db/schema.js";
@@ -81,6 +81,13 @@ export async function processEvent(
     });
     if (inserted && booking) {
       updateEscrowState(tx, event.bookingId, escrowStateForEvent(event.eventType));
+      // Issue #2: only a genuine `released` event counts as a verified
+      // session -- `forfeited` (also mapped to `released`) is a no-show
+      // outcome, not a completed appointment. The booking-level marker keeps
+      // a replay or a second reconciler from counting it twice.
+      if (event.eventType === "released") {
+        recordVerifiedSessionCountedSync(tx, event.bookingId, booking.providerProfileId, Math.floor(Date.now() / 1000));
+      }
     }
     return inserted;
   });

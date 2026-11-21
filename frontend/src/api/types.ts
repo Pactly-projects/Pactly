@@ -33,9 +33,23 @@ export interface ProviderProfile {
   depositRateBps: number;
   cancellationWindowHours: number;
   verifiedSessionCount: number;
+  /** Issue #2: shown beside the verified-session line; zero is shown. */
+  providerCancellationCount: number;
   isApproved: boolean;
   /** UTC epoch seconds, ascending. */
   slots: number[];
+  /** Issue #3: verified reviews, newest first. An empty list stays empty. */
+  reviews: ProviderReview[];
+}
+
+/** One client review, tied to the released booking it came from. */
+export interface ProviderReview {
+  id: string;
+  bookingId: string;
+  rating: number;
+  comment: string;
+  /** UTC epoch seconds. */
+  createdAt: number;
 }
 
 export interface CategoriesResponse {
@@ -64,8 +78,17 @@ export interface ProviderCard {
   earliestSlots: number[];
 }
 
+/** Issue #30: what an empty text search offers -- the nearest category
+ * that has approved shops and up to three of them. Absent when no approved
+ * shop exists at all (the empty state then stays empty). */
+export interface EmptySearchSuggestions {
+  category: Category;
+  providers: ProviderCard[];
+}
+
 export interface ProvidersResponse {
   providers: ProviderCard[];
+  suggestions?: EmptySearchSuggestions;
 }
 
 /** `GET /providers/suggest?q=`'s Story 3.3 shape -- mirrors
@@ -169,6 +192,8 @@ export interface BookingView {
    * through Pactly (`null` for unpaid or paid-in-cash) -- drives the
    * balance row's own Stellar Expert link. */
   balancePaymentTxHash: string | null;
+  /** Issue #3: `null` means "not reviewed" -- never a placeholder rating. */
+  review: ProviderReview | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +234,8 @@ export interface BookingListItemBase {
    * shown under a separate, collapsed "Expired holds" group, never mixed
    * into the main list (the spec's own "Always" rule). */
   isExpiredHold: boolean;
+  /** Issue #3: this booking's own review, `null` when not reviewed. */
+  review: ProviderReview | null;
 }
 
 export interface ClientBookingListItem extends BookingListItemBase {
@@ -373,6 +400,52 @@ export type OpenLocalDepositResponse = { needsTrustline: true; unsignedXdr: stri
 export interface AnchorChallengeResponse {
   authenticated: boolean;
   unsignedXdr?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #1 (Story 2.3): provider cash-out. Mirrors
+// `backend/src/services/cashOut.ts`'s view shapes.
+// ---------------------------------------------------------------------------
+
+export interface CashOutLimits {
+  min?: string;
+  max?: string;
+  currency?: string;
+}
+
+export interface CashOutBalance {
+  /** Integer string, USDC smallest units; `"0"` without a trustline. */
+  balance: string;
+  asset: string;
+  /** Whether the wallet can hold the anchor's USDC at all. */
+  hasTrustline: boolean;
+  limits?: CashOutLimits;
+}
+
+export type CashOutStatus = "awaiting_signature" | "waiting" | "sent" | "paid_out" | "failed";
+
+export interface CashOutView {
+  id: string;
+  status: CashOutStatus;
+  statusLabel: string;
+  amount: Money;
+  fiat: { amount: string; currency: string };
+  anchorTransactionId: string;
+  moreInfoUrl?: string;
+  /** UTC epoch seconds. */
+  createdAt: number;
+  sentAt?: number;
+  reason?: string;
+  stale?: boolean;
+}
+
+export interface CashOutsResponse {
+  cashOuts: CashOutView[];
+}
+
+export interface StartCashOutResponse {
+  cashOutId: string;
+  unsignedXdr: string;
 }
 
 // ---------------------------------------------------------------------------

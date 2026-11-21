@@ -1,3 +1,5 @@
+import { Link } from "react-router";
+
 export interface EmptyResultsFilterChip {
   key: string;
   /** Names the filter, e.g. "session format" -- AC5: "loosen a filter
@@ -20,6 +22,10 @@ export interface EmptyResultsProps {
    * whether anything else is even active to loosen. */
   browseLabel: string;
   onBrowseWider: () => void;
+  /** Issue #30: approved shops from the nearest category with inventory,
+   * returned by the backend for an empty text search. */
+  suggestions?: EmptySearchSuggestions;
+  onBrowseCategory?: (slug: string) => void;
 }
 
 /**
@@ -30,6 +36,8 @@ export interface EmptyResultsProps {
  * button; the rest are plain text so the list never shows a disabled or
  * dead control.
  */
+import type { EmptySearchSuggestions } from "../api/types";
+
 export function EmptyResults({
   query,
   filterChips,
@@ -38,6 +46,8 @@ export function EmptyResults({
   onClearAvailability,
   browseLabel,
   onBrowseWider,
+  suggestions,
+  onBrowseCategory,
 }: EmptyResultsProps) {
   return (
     <div className="empty-results banner">
@@ -72,6 +82,24 @@ export function EmptyResults({
           </button>
         </li>
       </ul>
+      {suggestions ? (
+        <div className="empty-results__suggestions">
+          <p className="empty-results__try">Or try {suggestions.category.name}:</p>
+          <ul className="empty-results__list">
+            {suggestions.providers.map((provider) => (
+              <li key={provider.id}>
+                <Link to={`/provider/${provider.id}`}>{provider.displayName}</Link>{" "}
+                <span className="empty-results__shop-title">{provider.title}</span>
+              </li>
+            ))}
+          </ul>
+          {onBrowseCategory ? (
+            <button type="button" className="button-ghost" onClick={() => onBrowseCategory(suggestions.category.slug)}>
+              See all of {suggestions.category.name}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

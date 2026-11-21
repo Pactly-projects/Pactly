@@ -1,13 +1,14 @@
 import { Link } from "react-router";
 
 import { BookingActions } from "./BookingActions";
+import { ReviewForm } from "./ReviewForm";
 import { Countdown } from "./Countdown";
 import { StateLabel } from "./StateLabel";
 import { TryAmount } from "./TryAmount";
 import { stellarExplorerContractUrl, stellarExplorerTransactionUrl, trustlessWorkViewerUrl } from "../lib/stellar";
 import { formatSlotDay, formatSlotTime } from "../lib/time";
 import type { Session } from "../wallet";
-import type { BalanceState, BookingLifecycle, Money, PendingActionKind } from "../api/types";
+import type { BalanceState, BookingLifecycle, Money, PendingActionKind, ProviderReview } from "../api/types";
 
 export interface BookingCardProps {
   /** Which side is looking at this card -- picks the "Resolved" wording
@@ -53,6 +54,11 @@ export interface BookingCardProps {
   onUnauthorized?: () => void;
   /** Held, not yet locked: resume the booking screen for this slot. */
   continueHref?: string;
+  /** Issue #3: this booking's own review, `null` when not reviewed. */
+  review?: ProviderReview | null;
+  /** Issue #3: called once the client's review is saved, so the list can
+   * refetch and this form can be replaced by the saved review. */
+  onReviewSubmitted?: () => void;
 }
 
 /** The balance row's own three-state wording (Epic 3 context: "Balance
@@ -93,9 +99,11 @@ export function BookingCard({
   onActionSubmitted,
   onUnauthorized,
   continueHref,
+  review,
+  onReviewSubmitted,
 }: BookingCardProps) {
   return (
-    <article className="booking-card">
+    <article className="booking-card" id={`booking-${id}`}>
       <header className="booking-card__header">
         <div>
           <p className="booking-card__heading">{heading}</p>
@@ -152,6 +160,18 @@ export function BookingCard({
           View in Escrow Viewer
         </a>
       )}
+
+      {viewer === "client" && review ? (
+        <div className="booking-card__review">
+          <p className="booking-card__review-heading">Your review</p>
+          <p className="booking-card__review-rating">{review.rating} out of 5</p>
+          {review.comment && <p className="booking-card__review-comment">{review.comment}</p>}
+        </div>
+      ) : null}
+
+      {viewer === "client" && !review && escrowState === "released" && session && onReviewSubmitted ? (
+        <ReviewForm bookingId={id} session={session} onReviewed={onReviewSubmitted} onUnauthorized={onUnauthorized} />
+      ) : null}
 
       <BookingActions
         viewer={viewer}

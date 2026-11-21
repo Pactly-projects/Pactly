@@ -5,6 +5,7 @@ import { DiscoverPage } from "./pages/discover/DiscoverPage";
 import { ProviderProfilePage } from "./pages/provider/ProviderProfilePage";
 import { AvailabilityPage } from "./pages/panel/AvailabilityPage";
 import { BookingsPage } from "./pages/panel/BookingsPage";
+import { CashOutPage } from "./pages/panel/CashOutPage";
 import { BookingPage } from "./pages/booking/BookingPage";
 import { MyBookingsPage } from "./pages/my-bookings/MyBookingsPage";
 import { ResolutionsPage } from "./pages/admin/ResolutionsPage";
@@ -46,6 +47,7 @@ export function App() {
         <Route path="/me/bookings" element={<MyBookingsPage />} />
         <Route path="/panel/availability" element={<AvailabilityPage />} />
         <Route path="/panel/bookings" element={<BookingsPage />} />
+        <Route path="/panel/cash-out" element={<CashOutPage />} />
         <Route path="/admin/resolutions" element={<ResolutionsPage />} />
         <Route path="/admin/applications" element={<ApplicationsPage />} />
       </Routes>

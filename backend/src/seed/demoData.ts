@@ -57,6 +57,12 @@ export interface DemoProvider {
   /** Local hours (0-23, aligned to the 15-minute boundary rules require by
    * construction) each open day offers a slot at. */
   dailySlotHours: number[];
+  /** Issue #2: demo-only starting values for the two trust counters. These
+   * exist so a seeded shop does not read as brand new; a real booking's own
+   * release/cancellation is the only thing that ever moves a real profile's
+   * counters, and the reconciler never consults or reuses this seed path. */
+  verifiedSessionCount?: number;
+  providerCancellationCount?: number;
 }
 
 /** `amount` is a plain decimal string, e.g. "900.00" -- converted to the
@@ -84,6 +90,8 @@ export const DEMO_PROVIDERS: DemoProvider[] = [
     depositRateBps: 5000,
     cancellationWindowHours: 72,
     dailySlotHours: [9, 13, 16],
+    verifiedSessionCount: 18,
+    providerCancellationCount: 1,
   },
   {
     id: "demo-elif-aydin",
@@ -98,6 +106,8 @@ export const DEMO_PROVIDERS: DemoProvider[] = [
     depositRateBps: 3000,
     cancellationWindowHours: 24,
     dailySlotHours: [10, 14, 17],
+    verifiedSessionCount: 42,
+    providerCancellationCount: 0,
   },
   {
     id: "demo-northside-barber",
@@ -221,6 +231,10 @@ async function upsertProvider(db: Db, categoryIdBySlug: Map<string, string>, pro
     depositRateBps: provider.depositRateBps,
     cancellationWindowHours: provider.cancellationWindowHours,
     isApproved: true as const,
+    ...(provider.verifiedSessionCount !== undefined ? { verifiedSessionCount: provider.verifiedSessionCount } : {}),
+    ...(provider.providerCancellationCount !== undefined
+      ? { providerCancellationCount: provider.providerCancellationCount }
+      : {}),
   };
   if (existing) {
     await db.update(providerProfiles).set(fields).where(eq(providerProfiles.id, existing.id));

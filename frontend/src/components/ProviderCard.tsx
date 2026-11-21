@@ -78,7 +78,7 @@ export function ProviderCard({ provider, variant = "compact", index = 0 }: Provi
           <p className="editorial-featured__role">{provider.title}</p>
           <p className="editorial-featured__quote">
             {provider.verifiedSessionCount > 0
-              ? `“${provider.verifiedSessionCount} verified sessions, deposit held in escrow until the appointment is done.”`
+              ? `“${provider.verifiedSessionCount} verified ${provider.verifiedSessionCount === 1 ? "session" : "sessions"} · ${provider.providerCancellationCount} ${provider.providerCancellationCount === 1 ? "cancellation" : "cancellations"}”`
               : "“Deposit held in escrow until the appointment is done — no blind prepay.”"}
           </p>
           <div className="editorial-featured__meta">
@@ -90,12 +90,10 @@ export function ProviderCard({ provider, variant = "compact", index = 0 }: Provi
               <ClockIcon size={15} weight="fill" aria-hidden="true" />
               {formatSessionFormat(provider.sessionFormat)} · {provider.sessionLengthMinutes} min
             </span>
-            {provider.verifiedSessionCount > 0 ? (
-              <span>
-                <SealCheckIcon size={15} weight="fill" aria-hidden="true" />
-                {provider.verifiedSessionCount} verified
-              </span>
-            ) : null}
+            <span>
+              <SealCheckIcon size={15} weight="fill" aria-hidden="true" />
+              {provider.verifiedSessionCount} verified · {provider.providerCancellationCount} cancelled
+            </span>
           </div>
         </div>
         <div className="editorial-featured__side">
@@ -140,6 +138,9 @@ export function ProviderCard({ provider, variant = "compact", index = 0 }: Provi
         <span>
           <ClockIcon size={13} aria-hidden="true" />
           {provider.sessionLengthMinutes} min
+        </span>
+        <span>
+          {provider.verifiedSessionCount} verified · {provider.providerCancellationCount} cancelled
         </span>
       </div>
       <DepositPill variant="row" amount={provider.deposit.amount} cancellationWindowHours={provider.cancellationWindowHours} />
