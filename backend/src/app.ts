@@ -1035,6 +1035,14 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
         return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
       }
       if (error instanceof BookingHoldExpiredError) {
+        // If a deploy contractId is already persisted, the hold expiry
+        // only applies when escrowState is null. When contractId is set,
+        // map to ESCROW_UNAVAILABLE (503) per the spec's design.
+        // This allows funding an expired hold that already has a contract.
+        const booking = await getBookingById(db, bookingId);
+        if (booking?.escrowContractId !== null) {
+          return c.json({ code: "ESCROW_UNAVAILABLE", message: error.message }, 503);
+        }
         return c.json({ code: "HOLD_EXPIRED", message: error.message }, 409);
       }
       if (error instanceof BookingEscrowStateError) {

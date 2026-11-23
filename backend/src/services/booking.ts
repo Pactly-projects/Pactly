@@ -567,15 +567,17 @@ async function requireProviderAddress(db: Db, booking: BookingRow): Promise<stri
 
 /** Refuses {@link BookingHoldExpiredError} once `holdExpiresAt` has passed
  * (`< now` strictly past; exactly at `holdExpiresAt` is still active) with
- * `escrowState` still `null` and no contract id. A `null` `holdExpiresAt` (a booking inserted
+ * `escrowState` still `null`. A `null` `holdExpiresAt` (a booking inserted
  * before Story 3.4, or through the plain `createBookingHold` helper) never
  * expires -- there is nothing to compare against. Once `escrowState` is set
- * the hold is moot (the deposit already reconciled), so this never fires
- * for a booking past that point either. */
+ * (meaning the deposit has been reconciled by the reconciler) the hold is
+ * moot, so this never fires for a booking past that point either. A
+ * `contractId` may be persisted independently of the hold expiry check --
+ * the hold expiry only applies when the booking is still in its initial
+ * `null` state. */
 function requireHoldNotExpired(booking: BookingRow, now: number): void {
   if (
     booking.escrowState === null
-    && booking.escrowContractId === null
     && booking.holdExpiresAt !== null
     && booking.holdExpiresAt < now
   ) {
