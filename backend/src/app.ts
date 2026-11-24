@@ -208,6 +208,7 @@ import {
   isShopSaved,
   getSavedShopsForClient,
 } from "./services/savedShops.js";
+import {
   InvalidReportReasonError,
   ReportRateLimitError,
   ShopNotFoundError,
@@ -2460,6 +2461,8 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
       }
       if (error instanceof ShopNotApprovedError) {
         return c.json({ code: "SHOP_NOT_APPROVED", message: error.message }, 409);
+      }
+    }
     const body = await c.req.json().catch(() => undefined);
     const reason = typeof body?.reason === "string" ? body.reason : "";
     
