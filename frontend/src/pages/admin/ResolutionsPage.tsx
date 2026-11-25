@@ -128,6 +128,9 @@ function DisputeRow({
         {dispute.suggestedOutcome
           ? `Policy suggestion: ${SUGGESTED_OUTCOME_LABEL[dispute.suggestedOutcome]}.`
           : "The booking policy has no automatic suggestion for a plain disagreement."}
+        {dispute.evidenceHash ? (
+          <span className="evidence-hash">Evidence hash: {dispute.evidenceHash}</span>
+        ) : null}
       </p>
       {resolvePending ? (
         <p className="booking-card__notice" aria-live="polite">

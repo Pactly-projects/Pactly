@@ -415,6 +415,8 @@ export interface AdminDisputeListItem {
   clientWalletAddress: string;
   /** UTC epoch seconds -- `null` only for a pre-3.4 booking with no slot. */
   slotStartsAt: number | null;
+  /** UTC epoch seconds -- `null` only when no opening record exists. */
+  openedAt: number | null;
   /** Free-text note the opener attached (may be empty, max 500 chars,
    * leading/trailing spaces trimmed before count). */
   note?: string;

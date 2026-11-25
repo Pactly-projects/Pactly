@@ -1631,6 +1631,9 @@ export async function listOpenDisputes(db: Db): Promise<AdminDisputeListItem[]> 
         : { id: booking.providerProfileId, displayName: "", title: "" },
       clientWalletAddress: booking.clientWalletAddress,
       slotStartsAt: slot?.startsAt ?? null,
+      openedAt: opening?.openedAt ?? null,
+      note: opening?.note ?? undefined,
+      evidenceHash: opening?.evidenceHash,
       pendingAction: derivePendingAction(booking, "disputed"),
     };
   });
