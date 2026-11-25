@@ -226,6 +226,7 @@ export function BookingsPage() {
                         cancelDeadline={booking.cancelDeadline}
                         serverTime={booking.serverTime}
                         session={session}
+                        receivingAddress={booking.receivingAddress}
                         onActionSubmitted={() => bookingsQuery.refetch()}
                         onUnauthorized={handleSignOut}
                       />

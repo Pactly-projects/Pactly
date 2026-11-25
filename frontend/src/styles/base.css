@@ -1590,6 +1590,31 @@ button {
   text-decoration: underline;
 }
 
+/* Issue #158: the shop's escrow receiver, shown on the booking for both
+ * sides with a copy control. */
+.receiving-address {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-14);
+}
+
+.receiving-address__label {
+  color: var(--color-text-secondary);
+}
+
+.receiving-address__value {
+  font-family: var(--font-label);
+  overflow-wrap: anywhere;
+}
+
+.receiving-address__unset {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
 .escrow-history__entry {
   display: flex;
   flex-wrap: wrap;

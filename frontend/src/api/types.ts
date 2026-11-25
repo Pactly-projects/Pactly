@@ -258,6 +258,9 @@ export interface BookingView {
    * shop and the client on the booking detail page, never on the public
    * profile or discovery). */
   note: string | null;
+  /** Issue #158: the address stored for this booking's shop -- the escrow's
+   * receiver, shown (and copyable) for both sides. */
+  receivingAddress: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +312,9 @@ export interface BookingListItemBase {
   /** UTC epoch seconds -- when the provider marked the client as arrived,
    * `null` until marked. */
   arrivedAt: number | null;
+  /** Issue #158: the address stored for this booking's shop (the escrow's
+   * receiver), `null` only when the shop's profile is gone. */
+  receivingAddress: string | null;
 }
 
 export interface ClientBookingListItem extends BookingListItemBase {

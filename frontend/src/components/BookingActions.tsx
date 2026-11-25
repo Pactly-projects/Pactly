@@ -19,6 +19,7 @@ import { LOCAL_CURRENCY_UNAVAILABLE_NOTE } from "../lib/money";
 import { getSession, signXdr, type Session } from "../wallet";
 import { signingAddressMismatch } from "../lib/walletConfirmation";
 import { WalletAddressConfirm } from "./WalletAddressConfirm";
+import { ReceivingAddress } from "./ReceivingAddress";
 import { useFormatTry } from "./TryAmount";
 import type {
   ActionResponse,
@@ -72,6 +73,10 @@ export interface BookingActionsProps {
    * open and unresolved). Used to show "Withdraw dispute" to the opener
    * only. */
   disputeOpenedByWallet?: string | null;
+  /** Issue #158: the address stored for this booking's shop, shown (and
+   * copyable) on the booking for the client and the shop alike. Never a
+   * newly generated address -- the same one the escrow already pays. */
+  receivingAddress?: string | null;
   /** Called once an action's signed transaction has actually been relayed
    * (escrow actions), or once a balance action's own final outcome is
    * known -- the caller's own cue to refetch its list/view. May return the
@@ -176,6 +181,7 @@ export function BookingActions({
   cancelDeadline,
   serverTime,
   session,
+  receivingAddress,
   onActionSubmitted,
   onUnauthorized,
 }: BookingActionsProps) {
@@ -581,13 +587,15 @@ export function BookingActions({
     !confirmingCash &&
     disputeStep.kind === "idle" &&
     !notice &&
-    !arrivedAt
+    !arrivedAt &&
+    !receivingAddress
   ) {
     return null;
   }
 
   return (
     <div className="booking-actions">
+      <ReceivingAddress address={receivingAddress} />
       {walletConfirm && (
         <WalletAddressConfirm
           address={walletConfirm.address}
