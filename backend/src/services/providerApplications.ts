@@ -23,6 +23,7 @@ import {
   getProviderApplicationById,
   insertProviderApplication,
   listPendingProviderApplications,
+  setPendingProviderApplicationAdminNote,
   updatePendingProviderApplication,
   type ProviderApplicationRow,
 } from "../db/providerApplications.js";
@@ -46,6 +47,7 @@ const MAX_LOCATION = 120;
 const MIN_DESCRIPTION = 10;
 const MAX_DESCRIPTION = 600;
 const MAX_REJECTION_REASON = 400;
+export const MAX_ADMIN_NOTE = 1000;
 
 export class InvalidProviderApplicationError extends Error {
   readonly details: Record<string, string>;
@@ -200,9 +202,12 @@ export interface ProviderApplicationView {
   profileId: string | null;
 }
 
-/** The admin queue's row: the applicant's view plus who is asking. */
+/** The admin queue's row: the applicant's view plus who is asking and the
+ * admin-only note. `adminNote` lives here and only here -- never on
+ * {@link ProviderApplicationView}, which is what the applicant reads. */
 export interface AdminProviderApplicationView extends ProviderApplicationView {
   walletAddress: string;
+  adminNote: string | null;
 }
 
 async function buildView(db: Db, row: ProviderApplicationRow, category: CategoryRow): Promise<ProviderApplicationView> {
@@ -224,6 +229,14 @@ async function buildView(db: Db, row: ProviderApplicationRow, category: Category
     createdAt: row.createdAt,
     decisionAt: row.decisionAt,
     profileId: profile?.id ?? null,
+  };
+}
+
+async function buildAdminView(db: Db, row: ProviderApplicationRow): Promise<AdminProviderApplicationView> {
+  return {
+    ...(await buildView(db, row, await categoryForRow(db, row))),
+    walletAddress: row.walletAddress,
+    adminNote: row.adminNote,
   };
 }
 
@@ -389,7 +402,7 @@ export async function listPendingApplications(db: Db): Promise<AdminProviderAppl
   const rows = await listPendingProviderApplications(db);
   const views: AdminProviderApplicationView[] = [];
   for (const row of rows) {
-    views.push({ ...(await buildView(db, row, await categoryForRow(db, row))), walletAddress: row.walletAddress });
+    views.push(await buildAdminView(db, row));
   }
   return views;
 }
@@ -445,7 +458,6 @@ export async function decideApplication(
     // hold the deposit leaves the application exactly as pending as it
     // found it -- and the admin's own screen says what is missing.
     await requireUsdcTrustline(profile.walletAddress, deps.usdcTrustline);
-    await setProviderProfileApproved(db, profile.id, true);
   }
 
   const decisionAt = Date.now();
@@ -475,5 +487,32 @@ export async function decideApplication(
   });
 
   const updated = (await getProviderApplicationById(db, id))!;
-  return { ...(await buildView(db, updated, await categoryForRow(db, updated))), walletAddress: updated.walletAddress };
+  return buildAdminView(db, updated);
+}
+
+/** `PUT /admin/applications/:id/note`: sets the admin-only note on a
+ * pending application. The note is trimmed; an empty (or missing) note
+ * clears it. It is never returned to the applicant -- see
+ * {@link AdminProviderApplicationView}. */
+export async function setApplicationAdminNote(db: Db, id: string, note: unknown): Promise<AdminProviderApplicationView> {
+  if (note !== null && note !== undefined && typeof note !== "string") {
+    throw new InvalidProviderApplicationError({ note: "Note must be text." });
+  }
+  const clean = cleanText(note);
+  if (clean.length > MAX_ADMIN_NOTE) {
+    throw new InvalidProviderApplicationError({ note: `Keep the note to ${MAX_ADMIN_NOTE} characters or fewer.` });
+  }
+  const row = await getProviderApplicationById(db, id);
+  if (!row) {
+    throw new ProviderApplicationNotFoundError();
+  }
+  if (row.state !== "pending") {
+    throw new ProviderApplicationDecidedError();
+  }
+  const written = await setPendingProviderApplicationAdminNote(db, id, clean.length > 0 ? clean : null);
+  if (!written) {
+    // Decided between the read above and this write.
+    throw new ProviderApplicationDecidedError();
+  }
+  return buildAdminView(db, (await getProviderApplicationById(db, id))!);
 }

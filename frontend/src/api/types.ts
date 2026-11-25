@@ -575,6 +575,8 @@ export interface ProviderApplication {
 
 export interface AdminProviderApplication extends ProviderApplication {
   walletAddress: string;
+  /** Admin-only note; never present on the applicant's `ProviderApplication`. */
+  adminNote: string | null;
 }
 
 export interface ProviderApplicationInput {

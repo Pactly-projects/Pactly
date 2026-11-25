@@ -82,6 +82,17 @@ export async function updatePendingProviderApplication(
   return result.changes > 0;
 }
 
+/** Sets (or, with `null`, clears) the admin-only note on a still-pending
+ * application. Returns `false` when it was decided first or does not
+ * exist, so a note can never be written onto a decided application. */
+export async function setPendingProviderApplicationAdminNote(db: Db, id: string, note: string | null): Promise<boolean> {
+  const result = await db
+    .update(providerApplications)
+    .set({ adminNote: note })
+    .where(and(eq(providerApplications.id, id), eq(providerApplications.state, "pending")));
+  return result.changes > 0;
+}
+
 export interface ProviderApplicationDecision {
   state: Exclude<ProviderApplicationState, "pending">;
   decisionByWallet: string;
