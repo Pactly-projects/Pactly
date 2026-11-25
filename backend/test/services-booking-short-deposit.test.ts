@@ -12,7 +12,9 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { lockDeposit, ShortDepositError } from "../src/services/booking.js";
 import { setAnchorDeposit } from "../src/db/bookings.js";
 import type { EscrowAdapter, UnsignedTransaction } from "../src/escrow/interface.js";
-import { closeDatabase, openTestDatabase, seedBooking, seedProviderProfile } from "./helpers.js";
+import { closeDatabase, openTestDatabase, seedBooking, seedProviderProfile, USDC_READY_WALLET_DEPS } from "./helpers.js";
+
+const LOCK_DEPS = { usdcTrustline: USDC_READY_WALLET_DEPS };
 
 function fakeContractId(): string {
   return "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
@@ -115,7 +117,7 @@ test("lockDeposit allows an exact anchor deposit amount", async () => {
       updatedAt: Math.floor(Date.now() / 1000),
     });
 
-    const lockResult = await lockDeposit(result.db, bookingId, fakeEscrowAdapter());
+    const lockResult = await lockDeposit(result.db, bookingId, fakeEscrowAdapter(), LOCK_DEPS);
     
     assert.ok(lockResult);
     assert.equal(lockResult.contractId, fakeContractId());
@@ -147,7 +149,7 @@ test("lockDeposit allows a greater anchor deposit amount", async () => {
       updatedAt: Math.floor(Date.now() / 1000),
     });
 
-    const lockResult = await lockDeposit(result.db, bookingId, fakeEscrowAdapter());
+    const lockResult = await lockDeposit(result.db, bookingId, fakeEscrowAdapter(), LOCK_DEPS);
     
     assert.ok(lockResult);
     assert.equal(lockResult.contractId, fakeContractId());
@@ -205,6 +207,7 @@ test("lockDeposit refuses when no anchor deposit exists at all", async () => {
       providerProfileId,
       clientWalletAddress: clientAddress,
       depositAmount,
+      anchorDeposit: "none",
     });
 
     // No anchor deposit set - must be refused as missing transfer

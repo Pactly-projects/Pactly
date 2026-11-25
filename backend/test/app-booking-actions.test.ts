@@ -299,7 +299,7 @@ test("POST /bookings/:id/dispute: 400 for an unknown reason, before ever reachin
 test("POST /bookings/:id/dispute: 200 for the client with a known reason, carrying the suggested outcome", async () => {
   const result = openTestDatabase();
   try {
-    const seed = await seedLockedBooking(result);
+    const seed = await seedLockedBooking(result, { cancelDeadline: Math.floor(Date.now() / 1000) - 3600 });
     const adapter = fakeEscrowAdapter({ startDispute: async () => ({ unsignedXdr: "x", txHash: "dispute-tx-hash" }) });
     const app = createApp(result.db, { escrowAdapter: adapter });
     const response = await app.request(`/bookings/${seed.bookingId}/dispute`, {
@@ -356,7 +356,7 @@ test("POST /bookings/:id/dispute: 409 once a dispute is already open", async () 
 test("POST /bookings/:id/dispute: 200 stores and returns the note and evidence hash", async () => {
   const result = openTestDatabase();
   try {
-    const seed = await seedLockedBooking(result);
+    const seed = await seedLockedBooking(result, { cancelDeadline: Math.floor(Date.now() / 1000) - 3600 });
     const adapter = fakeEscrowAdapter({ startDispute: async () => ({ unsignedXdr: "x", txHash: "dispute-tx-hash" }) });
     const app = createApp(result.db, { escrowAdapter: adapter });
     const response = await app.request(`/bookings/${seed.bookingId}/dispute`, {
@@ -491,7 +491,10 @@ test("POST /admin/bookings/:id/resolve: 200 for the dispute-resolver admin walle
 test("GET /admin/disputes: 404 for a non-admin wallet; 200 with the open dispute for an admin wallet", async () => {
   const result = openTestDatabase();
   try {
-    const seed = await seedLockedBooking(result, { lifecycleAction: "funded" });
+    const seed = await seedLockedBooking(result, {
+      lifecycleAction: "funded",
+      cancelDeadline: Math.floor(Date.now() / 1000) - 3600,
+    });
     const disputeTx = buildFakeTransactionXdr();
     const disputeAdapter = fakeEscrowAdapter({
       startDispute: async () => ({ unsignedXdr: "x", txHash: disputeTx.hash }),

@@ -20,7 +20,7 @@ import { createApp } from "../src/app.js";
 import { issueMoneyAssertionToken } from "../src/auth/assertion.js";
 import { issuePactlyJwt } from "../src/auth/challenge.js";
 import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
-import { getBookingById, insertBooking, updateEscrowContractId, updateEscrowState } from "../src/db/bookings.js";
+import { getBookingById, insertBooking, setAnchorDeposit, updateEscrowContractId, updateEscrowState } from "../src/db/bookings.js";
 import { insertProviderProfile } from "../src/db/providerProfiles.js";
 import { availabilitySlots, categories } from "../src/db/schema.js";
 import { holdSlot, TooManyHoldsError } from "../src/services/booking.js";
@@ -67,6 +67,22 @@ issuer="${USDC_ISSUER}"
 async function primeUsdcAssetCache(): Promise<void> {
   resetUsdcAssetCacheForTests();
   await resolveUsdcAsset({ fetchImpl: async () => ({ ok: true, status: 200, text: async () => FAKE_STELLAR_TOML }) });
+}
+
+/** Issue #48: `lockDeposit` refuses a booking with no credited anchor
+ * transfer. These route tests are about the escrow/wallet gates *after* that
+ * check, so credit a matching transfer before exercising the lock path. */
+async function creditAnchorDeposit(
+  result: ReturnType<typeof openTestDatabase>,
+  bookingId: string,
+): Promise<void> {
+  const booking = await getBookingById(result.db, bookingId);
+  await setAnchorDeposit(result.db, bookingId, {
+    id: `anchor-${bookingId}`,
+    status: "completed",
+    amountIn: booking?.depositAmount ?? "1000000",
+    updatedAt: Math.floor(Date.now() / 1000),
+  });
 }
 
 test("POST /bookings/hold returns 201 with amounts derived from the provider, never from the caller, and the real (primed, never live) USDC tokenAddress", async () => {
@@ -297,6 +313,7 @@ test("POST /bookings/:id/lock gives 503 ESCROW_UNAVAILABLE when the owner calls 
     await replaceFutureSlots(result.db, providerProfileId, [slotStartsAt]);
     const clientWalletAddress = "GOWNERWALLET4";
     const hold = await holdSlot(result.db, { providerProfileId, clientWalletAddress, slotStartsAt }, FAKE_USDC_DEPS);
+    await creditAnchorDeposit(result, hold.bookingId);
 
     const app = createApp(result.db, { usdcTrustlineDeps: USDC_READY_WALLET_DEPS });
     const headers = { ...(await authHeader(clientWalletAddress)), "content-type": "application/json" };
@@ -478,6 +495,7 @@ test("POST /bookings/:id/lock gives 502 ESCROW_REJECTED when the injected adapte
     await replaceFutureSlots(result.db, providerProfileId, [slotStartsAt]);
     const clientWalletAddress = "GOWNERWALLETREJECT0";
     const hold = await holdSlot(result.db, { providerProfileId, clientWalletAddress, slotStartsAt }, FAKE_USDC_DEPS);
+    await creditAnchorDeposit(result, hold.bookingId);
 
     const { EscrowApiError } = await import("../src/escrow/trustless-work/errors.js");
     const adapter = fakeEscrowAdapter({
@@ -502,7 +520,9 @@ async function holdForWalletReadinessTest(result: ReturnType<typeof openTestData
   const providerProfileId = await seedProviderProfile(result, { isApproved: true });
   const slotStartsAt = Math.floor(Date.now() / 1000) + 3600;
   await replaceFutureSlots(result.db, providerProfileId, [slotStartsAt]);
-  return holdSlot(result.db, { providerProfileId, clientWalletAddress, slotStartsAt }, FAKE_USDC_DEPS);
+  const hold = await holdSlot(result.db, { providerProfileId, clientWalletAddress, slotStartsAt }, FAKE_USDC_DEPS);
+  await creditAnchorDeposit(result, hold.bookingId);
+  return hold;
 }
 
 test("POST /bookings/:id/lock gives 409 WALLET_CANNOT_HOLD_DEPOSIT, and deploys nothing, when the client's wallet cannot hold the deposit (issue #4)", async () => {
@@ -583,6 +603,7 @@ test("POST /bookings/:id/lock with an injected adapter that accepts the deploy r
     await replaceFutureSlots(result.db, providerProfileId, [slotStartsAt]);
     const clientWalletAddress = "GOWNERWALLETACCEPT0";
     const hold = await holdSlot(result.db, { providerProfileId, clientWalletAddress, slotStartsAt }, FAKE_USDC_DEPS);
+    await creditAnchorDeposit(result, hold.bookingId);
 
     let deployCalls = 0;
     const adapter = fakeEscrowAdapter({

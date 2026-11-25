@@ -77,6 +77,40 @@ export interface ProviderProfile {
   slots: number[];
   /** Issue #65: present on the owner's own profile only. */
   breaks?: ProviderBreak[];
+  /** Issue #3: verified reviews, newest first. Optional because older API
+   * responses predate the reviews field; consumers fall back to `[]`. */
+  reviews?: ProviderReview[];
+  /** An admin-suspended shop is hidden from discovery and cannot take new
+   * bookings; its own panel reads these to explain why. */
+  isSuspended?: boolean;
+  suspensionReason?: string | null;
+}
+
+/** One client review, tied to the released booking it came from. */
+export interface ProviderReview {
+  id: string;
+  bookingId: string;
+  rating: number;
+  comment: string;
+  /** UTC epoch seconds. */
+  createdAt: number;
+}
+
+/** `GET/PUT/DELETE /me/provider/closed-dates` -- the shop's one-off
+ * closures, as `YYYY-MM-DD` UTC dates. */
+export interface ClosedDatesResponse {
+  closedDates: string[];
+}
+
+/** `PUT /me/provider/profile`'s editable copy -- the commercial terms and
+ * the approval flag are deliberately absent, so an edit cannot change what
+ * a client pays. */
+export interface ProviderProfileEditInput {
+  title: string;
+  bio: string;
+  languages: string[];
+  sessionLengthMinutes: number;
+  location: string;
 }
 
 export interface CategoriesResponse {
@@ -633,6 +667,70 @@ export interface AdminApplicationsResponse {
 }
 
 export type ProviderApplicationOutcome = "approve" | "reject";
+
+// ---------------------------------------------------------------------------
+// Saved shops: a client's personal list of shops they want to book again.
+// ---------------------------------------------------------------------------
+
+export interface SaveShopResponse {
+  savedShopId: string;
+}
+
+export interface UnsaveShopResponse {
+  unsaved: boolean;
+}
+
+export interface IsShopSavedResponse {
+  isSaved: boolean;
+}
+
+export interface SavedShop {
+  id: string;
+  provider: {
+    id: string;
+    displayName: string;
+    title: string;
+    location: string;
+    categoryId: string;
+    sessionFormat: string;
+    sessionLengthMinutes: number;
+    priceAmount: string;
+    depositRateBps: number;
+    cancellationWindowHours: number;
+    isApproved: boolean;
+    verifiedSessionCount: number;
+  };
+  savedAt: number;
+}
+
+export interface SavedShopsResponse {
+  shops: SavedShop[];
+}
+
+// ---------------------------------------------------------------------------
+// Shop reports: clients can report a shop to admins.
+// ---------------------------------------------------------------------------
+
+export interface ShopReportSubmitResponse {
+  reportId: string;
+}
+
+export interface ShopReport {
+  id: string;
+  reason: string;
+  createdAt: number;
+  reportedByWallet: string;
+  provider: {
+    id: string;
+    displayName: string;
+    walletAddress: string;
+    isApproved: boolean;
+  };
+}
+
+export interface ShopReportsListResponse {
+  reports: ShopReport[];
+}
 
 // ---------------------------------------------------------------------------
 // Public booking proof (shareable, no sign-in)

@@ -16,7 +16,7 @@ import {
 import { isDisputeWindowOpen } from "../lib/serverDispute";
 import { isFreeCancelOpen } from "../lib/serverCancel";
 import { LOCAL_CURRENCY_UNAVAILABLE_NOTE } from "../lib/money";
-import { getSession, signXdr, type Session } from "../wallet";
+import { assertMoneyAction, getSession, signXdr, type Session } from "../wallet";
 import { signingAddressMismatch } from "../lib/walletConfirmation";
 import { WalletAddressConfirm } from "./WalletAddressConfirm";
 import { useFormatTry } from "./TryAmount";
@@ -121,7 +121,7 @@ function policyStatement(suggestedOutcome: "refund-client" | "pay-provider" | un
   return "Your booking policy has no automatic outcome for a plain disagreement.";
 }
 
-type ActionKind = "complete" | "approve" | "release";
+type ActionKind = "complete" | "approve" | "release" | "withdraw-dispute";
 
 type DisputeStep =
   | { kind: "idle" }
@@ -176,6 +176,7 @@ export function BookingActions({
   cancelDeadline,
   serverTime,
   session,
+  disputeOpenedByWallet,
   onActionSubmitted,
   onUnauthorized,
 }: BookingActionsProps) {
@@ -209,6 +210,10 @@ export function BookingActions({
    * of this booking confirms it is still `unpaid`, so the client can never
    * fire a second real payment while the first one's outcome is unknown. */
   const [verifyingBalance, setVerifyingBalance] = useState(false);
+  /** Issue #22: the note and evidence hash the disputing party attaches to
+   * the dispute before confirming it. */
+  const [disputeNote, setDisputeNote] = useState("");
+  const [disputeEvidenceHash, setDisputeEvidenceHash] = useState("");
   const [withdrawConfirm, setWithdrawConfirm] = useState(false);
   const formatTryAmount = useFormatTry();
 
@@ -257,7 +262,12 @@ export function BookingActions({
         await runAction("approve", () => approveAppointment(id, session), "Approved. Waiting for it to confirm.");
         break;
       case "release":
-        await runAction("release", () => releaseDeposit(id, session), "Released. Waiting for it to confirm.");
+        await runAction(
+          "release",
+          (assertionToken) => releaseDeposit(id, session, assertionToken!),
+          "Released. Waiting for it to confirm.",
+          true,
+        );
         break;
       case "dispute":
         await pickDisputeReason(walletConfirm.reason);
@@ -464,6 +474,27 @@ export function BookingActions({
     }
   }
 
+  /** "Mark arrived" (provider only) -- the shop records when the client walks
+   * in, at or after the appointment start. No signature needed. */
+  async function handleMarkArrived(): Promise<void> {
+    if (!session || busyAction) return;
+    setBusyAction("mark-arrived");
+    setNotice(undefined);
+    try {
+      await markBookingArrived(id, session);
+      setNotice({ text: "Marked arrived." });
+      onActionSubmitted?.();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        onUnauthorized?.();
+        return;
+      }
+      setNotice({ text: describeFailure(error), alert: true });
+    } finally {
+      setBusyAction(undefined);
+    }
+  }
+
   async function handleWithdrawDispute(): Promise<void> {
     if (!session || busyAction) return;
     setBusyAction("withdraw-dispute");
@@ -509,12 +540,13 @@ export function BookingActions({
   const appointmentNotStarted = slotStartsAt === null || slotStartsAt > Math.floor(Date.now() / 1000);
   const canPayBalance = canAct && viewer === "client" && balanceState === "unpaid" && hasBalanceToPay && appointmentNotStarted && !verifyingBalance;
   const canMarkCash = canAct && viewer === "provider" && balanceState === "unpaid" && hasBalanceToPay;
+  const canMarkArrived = canAct && viewer === "provider" && arrivedAt === null && !appointmentNotStarted;
   // Issue #44: can withdraw dispute if the viewer is the opener and the dispute is unresolved
-  const canWithdrawDispute = Boolean(session) && 
-    escrowState !== "refunded" && 
-    escrowState !== "released" && 
-    lifecycle.action === "disputed" && 
-    disputeOpenedByWallet === session.walletAddress && 
+  const canWithdrawDispute = session != null &&
+    escrowState !== "refunded" &&
+    escrowState !== "released" &&
+    lifecycle.action === "disputed" &&
+    disputeOpenedByWallet === session.walletAddress &&
     !isPending;
   const isBusy = busyAction !== undefined;
 

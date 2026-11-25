@@ -36,7 +36,7 @@ function activeBookingForSlot(now: number) {
       // cleared on a state transition) would read as "active" again via
       // this second clause alone, defeating the whole point of excluding
       // `refunded` above.
-      and(isNull(bookings.escrowState), gte(bookings.holdExpiresAt, now)),
+      and(isNull(bookings.escrowState), gt(bookings.holdExpiresAt, now)),
     ),
   );
 }

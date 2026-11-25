@@ -65,10 +65,10 @@ export function CashOutPage() {
     setSession(undefined);
   }
 
-  const cashOuts = cashOutsQuery.data?.cashOuts ?? [];
+  const cashOuts: CashOutView[] = cashOutsQuery.data?.cashOuts ?? [];
   const pendingKey = cashOuts
-    .filter((cashOut) => cashOut.status === "sent" || cashOut.status === "waiting")
-    .map((cashOut) => cashOut.id)
+    .filter((cashOut: CashOutView) => cashOut.status === "sent" || cashOut.status === "waiting")
+    .map((cashOut: CashOutView) => cashOut.id)
     .join(",");
 
   // "Sent" is not the end: the bank still has to pay out. Poll only the
@@ -77,7 +77,7 @@ export function CashOutPage() {
     if (!session || !pendingKey) return;
     const ids = pendingKey.split(",");
     const interval = setInterval(() => {
-      void Promise.all(ids.map((id) => getCashOut(id, session).catch(() => undefined))).then(() => {
+      void Promise.all(ids.map((id: string) => getCashOut(id, session).catch(() => undefined))).then(() => {
         void cashOutsQuery.refetch();
       });
     }, 4000);

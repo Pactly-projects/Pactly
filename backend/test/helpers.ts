@@ -11,7 +11,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { openDatabase, closeDatabase, type OpenDatabaseResult } from "../src/db/client.js";
 import { availabilitySlots, categories, type BalanceState } from "../src/db/schema.js";
 import { insertProviderProfile } from "../src/db/providerProfiles.js";
-import { insertBooking } from "../src/db/bookings.js";
+import { insertBooking, setAnchorDeposit } from "../src/db/bookings.js";
 import type { ChainEvent, EventName } from "../src/chain/events.js";
 import type { UsdcTrustlineDeps } from "../src/anchor/trustline.js";
 import type { UsdcAsset } from "../src/anchor/usdc.js";
@@ -148,13 +148,21 @@ export async function seedBooking(result: OpenDatabaseResult, options: SeedBooki
     providerProfileId,
     clientWalletAddress: options.clientWalletAddress ?? `GCLIENT${bookingId.toUpperCase().slice(0, 20)}`,
     tokenAddress: options.tokenAddress ?? `CTOKEN${bookingId.toUpperCase().slice(0, 20)}`,
-    depositAmount: options.depositAmount ?? "1000000",
+    depositAmount,
     balanceAmount: options.balanceAmount,
     cancelDeadline: options.cancelDeadline ?? Math.floor(Date.now() / 1000) + 3600,
     ...(slotId ? { slotId } : {}),
     balanceState: options.balanceState,
     createdAt: Date.now(),
   });
+  if (options.anchorDeposit !== "none") {
+    await setAnchorDeposit(result.db, bookingId, {
+      id: `anchor-${bookingId}`,
+      status: "completed",
+      amountIn: options.anchorDeposit ?? depositAmount,
+      updatedAt: Math.floor(Date.now() / 1000),
+    });
+  }
   return bookingId;
 }
 

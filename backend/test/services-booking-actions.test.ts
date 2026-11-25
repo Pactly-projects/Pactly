@@ -476,7 +476,10 @@ test("openDispute: either the client or the provider may open one, each signing 
 test("openDispute: the provider can also open one, naming itself as the signer", async () => {
   const result = openTestDatabase();
   try {
-    const seed = await seedLockedBooking(result, { lifecycleAction: "funded" });
+    const seed = await seedLockedBooking(result, {
+      lifecycleAction: "funded",
+      cancelDeadline: Math.floor(Date.now() / 1000) - 3600,
+    });
     let captured: StartDisputeInput | undefined;
     const adapter: EscrowAdapter = {
       ...unreachableEscrowAdapter(),
@@ -653,7 +656,7 @@ test("openDispute: suggested outcome follows the cancellation policy (who cancel
     const providerCancelResult = await openDispute(result.db, providerCancel.bookingId, providerCancel.providerWalletAddress, "provider-cancel", adapter, now);
     assert.equal(providerCancelResult.suggestedOutcome, "refund-client");
 
-    const noShow = await seedLockedBooking(result, { lifecycleAction: "funded" });
+    const noShow = await seedLockedBooking(result, { lifecycleAction: "funded", cancelDeadline: now - 3600 });
     const noShowResult = await openDispute(result.db, noShow.bookingId, noShow.providerWalletAddress, "client-no-show", adapter, now);
     assert.equal(noShowResult.suggestedOutcome, "pay-provider");
 
@@ -841,7 +844,10 @@ test("listOpenDisputes returns only bookings whose current lifecycle action is s
       startDispute: async () => ({ unsignedXdr: "x", txHash: `h-${Math.random()}` }),
     };
 
-    const openOne = await seedLockedBooking(result, { lifecycleAction: "funded" });
+    const openOne = await seedLockedBooking(result, {
+      lifecycleAction: "funded",
+      cancelDeadline: Math.floor(Date.now() / 1000) - 3600,
+    });
     const openOneTx = buildFakeTransactionXdr();
     const openOneAdapter: EscrowAdapter = {
       ...unreachableEscrowAdapter(),

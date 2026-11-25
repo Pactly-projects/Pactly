@@ -2,7 +2,6 @@
  * for provider/category data. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiGet, apiPost, apiPut, ApiError, apiDelete } from "./client";
 import { apiDelete, apiGet, apiPost, apiPut, ApiError } from "./client";
 import type {
   ActionResponse,
@@ -51,6 +50,10 @@ import type {
   ShopReportsListResponse,
   ClosedDatesResponse,
   ProviderProfileEditInput,
+  CashOutBalance,
+  CashOutsResponse,
+  StartCashOutResponse,
+  CashOutView,
 } from "./types";
 import type { Session } from "../wallet";
 
@@ -156,6 +159,7 @@ export function getQuote(amount: string, refresh = false): Promise<QuoteResponse
 }
 
 const OWN_PROVIDER_KEY = (walletAddress: string | undefined) => ["me", "provider", walletAddress] as const;
+const CLOSED_DATES_KEY = (walletAddress: string | undefined) => ["me", "provider", "closed-dates", walletAddress] as const;
 
 /** `GET /me/provider` -- the signed-in provider's own view, including
  * while unapproved. */
@@ -232,6 +236,50 @@ export function useUpdateProviderAvailability(session: Session | undefined) {
   });
 }
 
+export function useClosedDates(session: Session | undefined) {
+  return useQuery({
+    queryKey: CLOSED_DATES_KEY(session?.walletAddress),
+    queryFn: () => apiGet<ClosedDatesResponse>("/me/provider/closed-dates", session?.token),
+    enabled: Boolean(session),
+    retry: false,
+  });
+}
+
+export function useCloseDate(session: Session | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (date: string) => apiPut<ClosedDatesResponse>(`/me/provider/closed-dates/${date}`, {}, session?.token),
+    onSuccess: (result) => {
+      queryClient.setQueryData(CLOSED_DATES_KEY(session?.walletAddress), result);
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+    },
+  });
+}
+
+export function useReopenDate(session: Session | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (date: string) => apiDelete<ClosedDatesResponse>(`/me/provider/closed-dates/${date}`, session?.token),
+    onSuccess: (result) => {
+      queryClient.setQueryData(CLOSED_DATES_KEY(session?.walletAddress), result);
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+    },
+  });
+}
+
+/** An approved shop's text edits. The response keeps the original price and
+ * deposit, so the form can show what stayed frozen. */
+export function useUpdateProviderProfile(session: Session | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ProviderProfileEditInput) => apiPut<ProviderProfile>("/me/provider/profile", input, session?.token),
+    onSuccess: (profile) => {
+      queryClient.setQueryData(OWN_PROVIDER_KEY(session?.walletAddress), profile);
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+    },
+  });
+}
+
 /** `POST /me/provider/availability/close-date` -- closes one local calendar
  * date: its unpaid holds are released (no deposit is taken from those
  * clients) and its open slots are removed. A funded booking is never
@@ -289,6 +337,11 @@ export function useHoldSlot() {
  * deployed. */
 export function rescheduleBooking(bookingId: string, slotStartsAt: number, session: Session): Promise<BookingView> {
   return apiPost<BookingView>(`/bookings/${bookingId}/reschedule`, { slotStartsAt }, session.token);
+}
+
+/** A client releases their own still-unfunded hold. */
+export function cancelHold(bookingId: string, session: Session): Promise<{ ok: true }> {
+  return apiDelete<{ ok: true }>(`/bookings/${bookingId}/hold`, session.token);
 }
 
 export function lockDeposit(bookingId: string, session: Session, rebuild = false): Promise<LockResponse> {
@@ -525,6 +578,29 @@ export function submitBalancePayment(bookingId: string, signedXdr: string, sessi
 }
 
 /** The shop declines an unlocked hold on its own slot. */
+/** The opener takes back an unresolved dispute, leaving the deposit where
+ * it was. A dispute that was already resolved is refused by the server. */
+export function withdrawDispute(
+  bookingId: string,
+  session: Session,
+): Promise<{ escrowState: "locked" | "disputed"; withdrawnAt: number | null }> {
+  return apiPost<{ escrowState: "locked" | "disputed"; withdrawnAt: number | null }>(
+    `/bookings/${bookingId}/dispute/withdraw`,
+    {},
+    session.token,
+  );
+}
+
+/** A client's verified review of a released booking (Issue #3). */
+export function createBookingReview(
+  bookingId: string,
+  rating: number,
+  comment: string,
+  session: Session,
+): Promise<{ review: ProviderReview }> {
+  return apiPost<{ review: ProviderReview }>(`/bookings/${bookingId}/review`, { rating, comment }, session.token);
+}
+
 export function declineHold(bookingId: string, session: Session): Promise<{ ok: true }> {
   return apiPost<{ ok: true }>(`/bookings/${bookingId}/decline`, {}, session.token);
 }
@@ -675,6 +751,28 @@ export function useUpdateProviderApplication(session: Session | undefined) {
   });
 }
 
+/** Live deposit preview for the application form: price + rate in, escrow
+ * asset amount out. Pure read, never submits the application itself. */
+export function useApplicationDepositPreview(
+  session: Session | undefined,
+  input: DepositPreviewInput | undefined,
+) {
+  return useQuery({
+    queryKey: [
+      "me",
+      "provider",
+      "application",
+      "deposit-preview",
+      session?.walletAddress,
+      input?.priceAmount,
+      input?.depositRateBps,
+    ],
+    queryFn: () => apiPost<DepositPreviewResponse>("/me/provider/application/deposit-preview", input, session?.token),
+    enabled: Boolean(session && input?.priceAmount && Number.isInteger(input.depositRateBps)),
+    retry: false,
+  });
+}
+
 export function useAdminApplications(session: Session | undefined) {
   return useQuery({
     queryKey: ["admin", "applications", session?.walletAddress],
@@ -763,6 +861,21 @@ export async function saveShop(providerProfileId: string, token: string): Promis
 /** Unsave a shop for the signed-in client. */
 export async function unsaveShop(providerProfileId: string, token: string): Promise<UnsaveShopResponse> {
   return apiDelete<UnsaveShopResponse>(`/providers/${providerProfileId}/save`, token);
+}
+
+/** A client asks to be notified when the shop next offers a slot on a
+ * given local date. The note is optional and capped client-side. */
+export function joinWaitlist(
+  providerProfileId: string,
+  date: string,
+  note: string | undefined,
+  session: Session,
+): Promise<{ ok: true }> {
+  return apiPost<{ ok: true }>(
+    `/providers/${providerProfileId}/waitlist`,
+    { date, note: note || undefined },
+    session.token,
+  );
 }
 
 /** Check if a shop is saved by the signed-in client. */

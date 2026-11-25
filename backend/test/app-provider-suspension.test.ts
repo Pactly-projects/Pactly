@@ -54,6 +54,7 @@ test("a suspended shop is absent from discovery and search, and its open booking
       isApproved: true,
     });
     const bookingId = await seedBooking(result, { providerProfileId, clientWalletAddress: CLIENT_WALLET });
+    await replaceFutureSlots(result.db, providerProfileId, [Math.floor(Date.now() / 1000) + 3600]);
 
     const app = createApp(result.db);
     const admin = await bearer(NON_RESOLVER_ADMIN_WALLET);
@@ -133,6 +134,7 @@ test("suspending twice keeps the latest reason, and unsuspending restores the li
       displayName: "Restorable Salon",
       isApproved: true,
     });
+    await replaceFutureSlots(result.db, providerProfileId, [Math.floor(Date.now() / 1000) + 3600]);
     const app = createApp(result.db);
     const admin = await bearer(NON_RESOLVER_ADMIN_WALLET);
 

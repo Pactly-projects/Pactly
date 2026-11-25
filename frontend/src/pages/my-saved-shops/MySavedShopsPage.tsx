@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 
 import { useSavedShops } from "../../api/hooks";
+import type { SavedShop } from "../../api/types";
 import { PageMasthead } from "../../components/PageMasthead";
 import { SignInPanel } from "../../components/SignInPanel";
 import { TryAmount } from "../../components/TryAmount";
@@ -24,12 +25,25 @@ export function MySavedShopsPage() {
     setSession(undefined);
   }
 
+  const masthead = (
+    <PageMasthead
+      title="Saved shops"
+      actions={
+        session ? (
+          <button type="button" className="button-ghost" onClick={handleSignOut}>
+            Sign out
+          </button>
+        ) : undefined
+      }
+    />
+  );
+
   if (!session) {
     return (
       <div className="page">
-        <PageMasthead title="Saved shops" backTo="/" />
+        {masthead}
         <SignInPanel
-          heading="Sign in to see your saved shops"
+          intro="Sign in to see your saved shops"
           onSignedIn={setSession}
         />
       </div>
@@ -39,7 +53,7 @@ export function MySavedShopsPage() {
   if (shopsQuery.isLoading) {
     return (
       <div className="page">
-        <PageMasthead title="Saved shops" backTo="/" onSignOut={handleSignOut} />
+        {masthead}
         <p>Loading your saved shops…</p>
       </div>
     );
@@ -48,7 +62,7 @@ export function MySavedShopsPage() {
   if (shopsQuery.error) {
     return (
       <div className="page">
-        <PageMasthead title="Saved shops" backTo="/" onSignOut={handleSignOut} />
+        {masthead}
         <div className="banner banner--alert">
           <p>Connection dropped. Try again.</p>
         </div>
@@ -60,7 +74,7 @@ export function MySavedShopsPage() {
 
   return (
     <div className="page">
-      <PageMasthead title="Saved shops" backTo="/" onSignOut={handleSignOut} />
+      {masthead}
 
       {shops.length === 0 ? (
         <div className="banner">
@@ -71,7 +85,7 @@ export function MySavedShopsPage() {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-          {shops.map((shop) => (
+          {shops.map((shop: SavedShop) => (
             <Link
               key={shop.id}
               to={`/providers/${shop.provider.id}`}

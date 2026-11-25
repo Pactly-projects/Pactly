@@ -23,6 +23,7 @@ import {
   setProviderProfileBookingsPaused,
   setProviderProfileSuspension,
   updateProviderProfileRules,
+  updateProviderProfileTimezone,
   updateProviderProfileText as persistProviderProfileText,
   updateProviderProfileTimezone,
   type ProviderProfileRow,
@@ -48,6 +49,8 @@ import {
   workingRangesForSlots,
 } from "./availability.js";
 import { isWithinBookingWindow } from "./bookingWindow.js";
+import { buildPublicHours, type PublicDayHours } from "./publicHours.js";
+import { isValidTimeZone } from "./timezone.js";
 
 /** Pactly's only supported asset for now (matches `services/booking.ts`'s
  * own `DEPOSIT_ASSET_SYMBOL`). Every amount this module returns is shaped
@@ -467,6 +470,13 @@ export interface ProviderProfileView {
    * verified-session line. An honest zero, never hidden. */
   providerCancellationCount: number;
   isApproved: boolean;
+  /** A suspended shop is never returned publicly (`getPublicProviderProfile`
+   * refuses it), but its own panel still reads the profile -- that is what
+   * shows the reason below. */
+  isSuspended: boolean;
+  /** The latest admin-stated reason, or `null` when the shop is not
+   * suspended. */
+  suspensionReason: string | null;
   /** Issue #62: the shop has paused new bookings. `slots` is empty while
    * this is `true` (existing bookings are unaffected), and the profile page
    * says so instead of offering a slot. */
@@ -1265,6 +1275,12 @@ export async function listDiscoverProviders(
       (profile) => earliestSlotsByProvider.get(profile.id)?.[0] !== undefined,
     );
   }
+
+  const weeklyPatternSlotsByProvider = await listWeeklyPatternSlotsByProvider(
+    db,
+    profiles.map((profile) => profile.id),
+    now,
+  );
 
   const cards = profiles.map((profile) => {
     const category = categoryById.get(profile.categoryId);

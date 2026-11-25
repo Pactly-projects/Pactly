@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import { createApp } from "../src/app.js";
 import { issuePactlyJwt } from "../src/auth/challenge.js";
+import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
 import { NON_RESOLVER_ADMIN_WALLET } from "./testConfigEnvAdmin.js";
 import {
   closeDatabase,
@@ -185,7 +186,12 @@ test("only an admin sees the queue; approving lists the profile immediately (4.2
       body: JSON.stringify({ outcome: "approve" }),
     });
     assert.equal(approved.status, 200);
-    assert.equal(((await approved.json()) as { application: { state: string } }).application.state, "approved");
+    const approvedBody = (await approved.json()) as { application: { state: string; profileId: string | null } };
+    assert.equal(approvedBody.application.state, "approved");
+    // Discovery is bookable-only: the freshly approved shop needs one open
+    // slot before it can appear in `/providers`.
+    assert.ok(approvedBody.application.profileId);
+    await replaceFutureSlots(result.db, approvedBody.application.profileId, [Math.floor(Date.now() / 1000) + 3600]);
 
     const listed = await app.request("/providers");
     const providers = ((await listed.json()) as { providers: Array<{ displayName: string }> }).providers;

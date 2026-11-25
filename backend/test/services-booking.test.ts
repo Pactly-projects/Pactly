@@ -17,9 +17,10 @@ import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
 
-import { BookingDeployInFlightError, BookingEscrowStateError, BookingNotFoundError, DepositAlreadyLandedError, fundDeposit, getBookingView, lockDeposit, resolveBookingDispute, setBalanceState } from "../src/services/booking.js";
+import { BookingDeployInFlightError, BookingEscrowStateError, BookingNotFoundError, DepositAlreadyLandedError, SlotInPastError, fundDeposit, getBookingView, lockDeposit, resolveBookingDispute, setBalanceState } from "../src/services/booking.js";
 import { getEscrowDisputeResolution } from "../src/db/escrowDisputeResolutions.js";
-import { getBookingById, recordDeploySubmission, updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
+import { getBookingById, recordDeploySubmission, setEscrowFundTxHash, updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
+import { listContractDeployments } from "../src/db/escrowContractDeployments.js";
 import { bookings, availabilitySlots } from "../src/db/schema.js";
 import { insertEscrowProcessedEventIfNew } from "../src/db/escrowProcessedEvents.js";
 import type { Db } from "../src/db/client.js";
@@ -494,16 +495,16 @@ test("fundDeposit refuses when the slot has already started (SlotInPastError)", 
     await updateEscrowContractId(result.db, bookingId, contractId, "unsigned-xdr", "deploy-tx-hash");
     await recordDeploySubmission(result.db, bookingId, contractId, "deploy-tx-hash", now - 100, now - 700);
 
-    // A persisted contract id is the evidence that a deploy was already
-    // submitted, so this booking is no longer an uncommitted hold and its
-    // old hold clock must not refuse the fund build.
+    // The slot started an hour ago: even with a persisted deploy, funding
+    // must be refused rather than writing XDR against a time that has passed.
     const adapter: EscrowAdapter = {
       ...unreachableEscrowAdapter(),
       fund: async () => ({ unsignedXdr: "unsigned-fund-xdr", txHash: "fund-tx-hash" }),
     };
-    const built = await fundDeposit(result.db, bookingId, adapter, { now: past + 1 });
-
-    assert.equal(built.txHash, "fund-tx-hash");
+    await assert.rejects(
+      () => fundDeposit(result.db, bookingId, adapter, { now: now + 1 }),
+      SlotInPastError,
+    );
   } finally {
     closeDatabase(result);
   }
@@ -567,9 +568,14 @@ test("Issue #5: a fund transaction the network already reports successful is nev
       },
     };
 
+    // The chain confirms the stored fund transaction succeeded: asking the
+    // adapter for a second one would put the client one tap from paying twice.
     await assert.rejects(
-      () => fundDeposit(result.db, bookingId, unreachableEscrowAdapter(), { now }),
-      (error: unknown) => error instanceof Error && error.name === "SlotInPastError",
+      () =>
+        fundDeposit(result.db, bookingId, adapter, {
+          transactionReachedSuccess: async (txHash) => txHash === "first-fund-tx-hash",
+        }),
+      DepositAlreadyLandedError,
     );
 
     const booking = await getBookingById(result.db, bookingId);

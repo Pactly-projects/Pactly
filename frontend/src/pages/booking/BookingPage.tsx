@@ -21,7 +21,7 @@ import {
   useTryRate,
 } from "../../api/hooks";
 import { ApiError } from "../../api/client";
-import type { HoldSlotResponse, LocalDepositView, QuoteResponse } from "../../api/types";
+import type { BookingView, HoldSlotResponse, LocalDepositView, QuoteResponse } from "../../api/types";
 import { DepositPill } from "../../components/DepositPill";
 import { EscrowConfirmation } from "../../components/EscrowConfirmation";
 import { EscrowLane } from "../../components/EscrowLane";
@@ -30,10 +30,12 @@ import { LockButton } from "../../components/LockButton";
 import { ProviderHeader } from "../../components/ProviderHeader";
 import { Seal } from "../../components/Seal";
 import { TryAmount, useFormatTry } from "../../components/TryAmount";
+import { WalletAddressConfirm } from "../../components/WalletAddressConfirm";
 import { ESCROW_UNAVAILABLE_CODE } from "../../lib/escrowConfirmation";
-import { formatFiatAmount } from "../../lib/money";
+import { formatFiatAmount, formatMoney } from "../../lib/money";
 import { providerPhotoSrc } from "../../lib/providerPhotos";
-import { formatSlotDay, formatSlotTime } from "../../lib/time";
+import { formatSlotDay, formatSlotTime, formatSlotWithZone } from "../../lib/time";
+import { signingAddressMismatch } from "../../lib/walletConfirmation";
 import { displayedQuoteIsStale, freshQuote, rememberQuote, type DisplayedQuote } from "../../lib/quoteFreshness";
 import { signInErrorMessage } from "../../components/SignInPanel";
 import {
@@ -123,6 +125,8 @@ export function BookingPage() {
   const [hold, setHold] = useState<HoldSlotResponse | undefined>();
   const [holdSecondsLeft, setHoldSecondsLeft] = useState<number | undefined>();
   const [holdEndedWhileIdle, setHoldEndedWhileIdle] = useState(false);
+  const [cancellingHold, setCancellingHold] = useState(false);
+  const [holdCancelled, setHoldCancelled] = useState(false);
   const [rescheduleBusy, setRescheduleBusy] = useState(false);
   const [rescheduleError, setRescheduleError] = useState<string | undefined>();
   const [rescheduleNotice, setRescheduleNotice] = useState<string | undefined>();
@@ -152,6 +156,26 @@ export function BookingPage() {
     | { kind: "retry"; address: string }
     | undefined
   >();
+
+  // Issue #5/#7: what `GET /bookings/:id` says about this booking the moment
+  // the hold comes back -- whether a deploy behind the stored contract id is
+  // already confirmed, and every contract id the booking has had. Read once,
+  // before the client taps anything, so the step offered is the one that is
+  // actually outstanding.
+  const [bookingFacts, setBookingFacts] = useState<BookingView | undefined>();
+
+  /** Optional contact email stored on the booking so the shop can open a
+   * mailto draft after release — Pactly never sends mail itself. */
+  const [clientEmail, setClientEmail] = useState("");
+
+  // The local-currency figure this screen is showing comes from a SEP-38
+  // quote. Remember *when we fetched it* so a tab left open cannot keep
+  // presenting an amount the anchor would no longer honour.
+  const [depositQuote, setDepositQuote] = useState<DisplayedQuote | undefined>();
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  const [quoteError, setQuoteError] = useState<string | undefined>();
+  const flowFatalErrorRef = useRef<HTMLParagraphElement | null>(null);
+  const quoteErrorRef = useRef<HTMLParagraphElement | null>(null);
 
   // Review follow-up: the flow's own "engine" state (which contractId is in
   // play, whether a deploy has actually been submitted) lives in a ref, not
@@ -917,6 +941,41 @@ export function BookingPage() {
     }
   }
 
+  /** Story #19: retry a failed local-currency transfer against the *same*
+   * hold/booking, never opening a new one or asking for bank details twice. */
+  async function retryFailedDeposit(): Promise<void> {
+    if (!hold || !session || !localDeposit) return;
+    setLocalBusy(true);
+    setLocalNotice(undefined);
+    try {
+      const result = await fetch(`/api/bookings/${hold.bookingId}/deposit/local/retry`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.token}`,
+        },
+      }).catch(() => {
+        setLocalNotice("Connection error. Try again.");
+      });
+      if (result?.ok) {
+        const data = await result.json() as LocalDepositView;
+        setLocalDeposit(data);
+        if (data.holdExpiresAt) {
+          setHold((current) => (current ? { ...current, holdExpiresAt: data.holdExpiresAt ?? current.holdExpiresAt } : current));
+        }
+      }
+    } catch (error) {
+      const message = localDepositErrorMessage(error);
+      if (message === "unauthorized") {
+        handleUnauthorized();
+        return;
+      }
+      setLocalNotice(message);
+    } finally {
+      setLocalBusy(false);
+    }
+  }
+
   async function handleReschedule(newStartsAt: number): Promise<void> {
     if (!hold || !session) return;
     setRescheduleBusy(true);
@@ -962,6 +1021,9 @@ export function BookingPage() {
   const localReceived = localDeposit?.status === "received";
   // "Lock with Pactly" only ever appears once the bank transfer is in.
   const showLock = Boolean(hold) && localReceived;
+  // Once the bank transfer is moving or in, the hold is no longer the
+  // client's to give back from this screen.
+  const canCancelHold = phase === "idle" && !localReceived && localDeposit?.status !== "paying";
   const insideFreeWindow = booking.data !== undefined && Math.floor(Date.now() / 1000) < booking.data.cancelDeadline;
   const rescheduleOptions = profile?.slots.filter((startsAt) => startsAt !== slotStartsAt).slice(0, 6) ?? [];
 
@@ -1244,6 +1306,7 @@ export function BookingPage() {
                       <LockButton
                         waitingOn={waitingOn}
                         actionLabel={actionLabel}
+                        depositAmount={hold?.deposit.amount}
                         disabled={lockInFlight}
                         onClick={() => void runLockFlow()}
                         onOpenWalletAgain={() => void retryPendingSignature()}
@@ -1299,6 +1362,7 @@ export function BookingPage() {
                 <LockButton
                   waitingOn={waitingOn}
                   actionLabel={actionLabel}
+                  depositAmount={hold?.deposit.amount}
                   disabled={lockInFlight}
                   onClick={() => void runLockFlow()}
                   onOpenWalletAgain={() => void retryPendingSignature()}
@@ -1316,7 +1380,7 @@ export function BookingPage() {
               )}
               {escrowUnavailable && <EscrowConfirmation unavailableMessage={flowFatalError} />}
               {flowFatalError && !escrowUnavailable && (
-                <p className="escrow-lane__notice escrow-lane__notice--alert" role="alert">
+                <p ref={flowFatalErrorRef} className="escrow-lane__notice escrow-lane__notice--alert" role="alert" tabIndex={-1}>
                   {flowFatalError}
                 </p>
               )}

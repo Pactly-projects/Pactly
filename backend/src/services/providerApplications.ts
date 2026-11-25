@@ -29,6 +29,7 @@ import {
 import {
   getProviderProfileByWallet,
   insertProviderProfile,
+  setProviderProfileApproved,
   setProviderProfileApprovedSync,
   updateProviderProfileFromApplication,
 } from "../db/providerProfiles.js";

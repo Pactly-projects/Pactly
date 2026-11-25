@@ -53,6 +53,9 @@ import { AccountFundingError, InvalidXdrError, NoCustodialAccountError } from ".
 import { ensureAccountReady, ensureAccountReadyInBackground, type EnsureAccountReadyDeps } from "./custodial/funding.js";
 import { signXdrForWallet } from "./custodial/keys.js";
 import { getUserByWalletAddress } from "./db/users.js";
+import { getSlotById } from "./db/availabilitySlots.js";
+import { listAdminDecisionAudit } from "./db/adminDecisionAudit.js";
+import { getProviderProfileById } from "./db/providerProfiles.js";
 import { getCategoryById, getCategoryBySlug, insertCategory, updateCategoryVisibility } from "./db/categories.js";
 import { RateUnavailableError, getTryRate } from "./services/rate.js";
 import type { Db } from "./db/client.js";
@@ -64,6 +67,10 @@ import {
   NotAProviderError,
   ProviderNotApprovedError,
   ProviderNotFoundError,
+  InvalidSuspensionReasonError,
+  suspendProviderProfile,
+  suggestProvidersForEmptySearch,
+  unsuspendProviderProfile,
   updateProviderProfile,
   getOwnProviderProfile,
   getPublicProviderProfile,
@@ -88,12 +95,14 @@ import {
   decideApplication,
   getOwnProviderApplication,
   listPendingApplications,
+  previewApplicationDeposit,
   updateOwnProviderApplication,
 } from "./services/providerApplications.js";
 import {
   BookingActionPendingError,
   BalanceAlreadySettledError,
   BookingDeployInFlightError,
+  DepositAlreadyLandedError,
   BookingEscrowStateError,
   BookingHoldExpiredError,
   BookingNotFoundError,
@@ -152,6 +161,7 @@ import {
 import { config } from "./config.js";
 import { DISPUTE_OUTCOMES, type DisputeOutcome, type DisputeReason } from "./db/schema.js";
 import { getBookingById, setBookingNote, clearBookingNote } from "./db/bookings.js";
+import { listEscrowEventsForParties } from "./db/escrowEvents.js";
 import {
   AmountOutOfRangeError,
   AnchorAuthError,
@@ -164,6 +174,7 @@ import {
   AnchorUnavailableError,
   QuoteMismatchError,
   QuoteStaleError,
+  UsdcTrustlineMissingError,
 } from "./anchor/errors.js";
 import { fetchIndicativePrice, type Sep38FetchLike } from "./anchor/sep38.js";
 import {
@@ -400,6 +411,10 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
   const localDepositDeps: LocalDepositDeps = {
     ...options.localDepositDeps,
     fetchImpl: options.localDepositDeps?.fetchImpl ?? (quoteFetchImpl as AnchorFetchLike | undefined),
+  };
+  const cashOutDeps: CashOutDeps = {
+    ...options.cashOutDeps,
+    fetchImpl: options.cashOutDeps?.fetchImpl ?? localDepositDeps.fetchImpl,
   };
   const usdcTrustlineDeps = options.usdcTrustlineDeps ?? {};
 
@@ -986,6 +1001,100 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     }
   });
 
+  /** Editing the shop's own read-only fields. `priceAmount` and
+   * `depositRateBps` deliberately do not appear here: they are governed by
+   * the original application and stay exactly as first submitted. */
+  app.put("/me/provider/profile", requirePactlyAuth, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    try {
+      const profile = await updateProviderProfile(db, c.get("walletAddress"), {
+        title: typeof body?.title === "string" ? body.title : "",
+        bio: typeof body?.bio === "string" ? body.bio : "",
+        languages: Array.isArray(body?.languages) ? (body.languages as string[]) : [],
+        sessionLengthMinutes:
+          typeof body?.sessionLengthMinutes === "number" ? body.sessionLengthMinutes : Number.NaN,
+        location: typeof body?.location === "string" ? body.location : "",
+      });
+      return c.json(profile);
+    } catch (error) {
+      if (error instanceof NotAProviderError) {
+        return c.json({ code: "NOT_A_PROVIDER", message: error.message }, 404);
+      }
+      if (error instanceof ProviderNotApprovedError) {
+        return c.json({ code: "NOT_APPROVED", message: error.message }, 403);
+      }
+      if (error instanceof InvalidProviderProfileError) {
+        return c.json({ code: "INVALID_PROFILE", message: error.message, details: error.details }, 400);
+      }
+      throw error;
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Closed dates: a shop blocks a whole calendar day. Every route resolves
+  // "whose shop" from the caller's own wallet, never from the request body.
+  // ---------------------------------------------------------------------
+  const closedDateErrorResponse = (error: unknown, c: Context<{ Variables: Variables }>) => {
+    if (error instanceof NotAProviderError) {
+      return c.json({ code: "NOT_A_PROVIDER", message: error.message }, 404);
+    }
+    if (error instanceof InvalidClosedDateError) {
+      return c.json({ code: "INVALID_CLOSED_DATE", message: error.message, details: error.details }, 400);
+    }
+    if (error instanceof ClosedDateBookingError) {
+      return c.json(
+        {
+          code: "DATE_HAS_BOOKING",
+          message: error.message,
+          details: { bookingId: error.bookingId, slotStartsAt: error.slotStartsAt, escrowState: error.escrowState },
+        },
+        409,
+      );
+    }
+    return undefined;
+  };
+
+  app.get("/me/provider/closed-dates", requirePactlyAuth, async (c) => {
+    try {
+      return c.json({ closedDates: await listClosedDatesForWallet(db, c.get("walletAddress")) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  app.post("/me/provider/closed-dates", requirePactlyAuth, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    try {
+      return c.json({ closedDates: await closeDate(db, c.get("walletAddress"), body?.date) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  app.put("/me/provider/closed-dates/:date", requirePactlyAuth, async (c) => {
+    try {
+      return c.json({ closedDates: await closeDate(db, c.get("walletAddress"), c.req.param("date")) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
+  app.delete("/me/provider/closed-dates/:date", requirePactlyAuth, async (c) => {
+    try {
+      return c.json({ closedDates: await reopenDate(db, c.get("walletAddress"), c.req.param("date")) });
+    } catch (error) {
+      const mapped = closedDateErrorResponse(error, c);
+      if (mapped) return mapped;
+      throw error;
+    }
+  });
+
   /** Closing a whole date: releases that date's still-active unpaid holds
    * (they get `shop-closed-date`, so their clients see why) and removes its
    * future open slots. A funded booking is never released; it comes back in
@@ -1332,6 +1441,31 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       }
       if (error instanceof SlotUnavailableError) {
         return c.json({ code: "SLOT_UNAVAILABLE", message: error.message }, 409);
+      }
+      if (error instanceof BookingEscrowStateError) {
+        return c.json({ code: "BOOKING_STATE", message: error.message }, 409);
+      }
+      throw error;
+    }
+  });
+
+  /** A client releases their own still-unfunded hold. An expired hold and
+   * one that already reached escrow are distinct refusals, never a silent
+   * "ok" that would leave the client staring at a stale screen. */
+  app.delete("/bookings/:id/hold", requirePactlyAuth, async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+    }
+    try {
+      await cancelHold(db, bookingId, c.get("walletAddress"));
+      return c.json({ ok: true });
+    } catch (error) {
+      if (error instanceof BookingNotFoundError) {
+        return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
+      }
+      if (error instanceof BookingHoldExpiredError) {
+        return c.json({ code: "HOLD_EXPIRED", message: error.message }, 409);
       }
       if (error instanceof BookingEscrowStateError) {
         return c.json({ code: "BOOKING_STATE", message: error.message }, 409);
@@ -1833,6 +1967,23 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
   app.get("/me/bookings", requirePactlyAuth, async (c) => {
     const bookingsList = await listBookingsForClient(db, c.get("walletAddress"));
     return c.json({ bookings: bookingsList });
+  });
+
+  /** Issue #31: the signed-in wallet's own escrow timeline, newest first.
+   * Only bookings where the wallet is a client or the provider are read -- a
+   * stranger to a booking sees no events for it. */
+  app.get("/me/events", requirePactlyAuth, async (c) => {
+    const walletAddress = c.get("walletAddress");
+    const clientBookings = await listBookingsForClient(db, walletAddress);
+    let providerBookings: Array<{ id: string }> = [];
+    try {
+      providerBookings = await listBookingsForProvider(db, walletAddress);
+    } catch (error) {
+      if (!(error instanceof NotAProviderError)) throw error;
+    }
+    const bookingIds = [...new Set([...clientBookings, ...providerBookings].map((booking) => booking.id))];
+    const events = await listEscrowEventsForParties(db, walletAddress, bookingIds);
+    return c.json({ events });
   });
 
   /** Issue #67: the signed-in shop downloads its own bookings as CSV for a
@@ -2573,7 +2724,7 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
 
     const body = await c.req.json().catch(() => undefined);
     const reason = typeof body?.reason === "string" ? body.reason : "";
-    
+
     try {
       const now = Math.floor(Date.now() / 1000);
       const result = await submitShopReport(
