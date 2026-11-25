@@ -86,6 +86,7 @@ function buildProvidersPath(filters: DiscoverFiltersParams): string {
   if (filters.maxPrice !== undefined) params.set("maxPrice", filters.maxPrice);
   if (filters.maxDepositBps !== undefined) params.set("maxDepositBps", String(filters.maxDepositBps));
   if (filters.when) params.set("when", filters.when);
+  if (filters.sort) params.set("sort", filters.sort);
   const query = params.toString();
   return query ? `/providers?${query}` : "/providers";
 }
@@ -118,12 +119,12 @@ export function useProviderSuggestions(query: string) {
   });
 }
 
-/** The public `GET /providers/:id` view -- no auth, no retry on a 404
+/** The public `GET /providers/:id` view -- optional auth, no retry on a 404
  * (an unapproved/unknown id will not become approved by retrying). */
-export function usePublicProviderProfile(id: string | undefined) {
+export function usePublicProviderProfile(id: string | undefined, token?: string) {
   return useQuery({
-    queryKey: ["providers", id],
-    queryFn: () => apiGet<ProviderProfile>(`/providers/${id}`),
+    queryKey: ["providers", id, token],
+    queryFn: () => apiGet<ProviderProfile>(`/providers/${id}`, token),
     enabled: Boolean(id),
     retry: false,
   });
@@ -239,11 +240,12 @@ export function useUpdateProviderAvailability(session: Session | undefined) {
 export function closeProviderDate(
   date: string,
   session: Session,
+  endDate: string = date,
   tzOffsetMinutes = new Date().getTimezoneOffset(),
 ): Promise<CloseProviderDateResponse> {
   return apiPost<CloseProviderDateResponse>(
     "/me/provider/availability/close-date",
-    { date, tzOffsetMinutes },
+    { date, endDate, tzOffsetMinutes },
     session.token,
   );
 }
@@ -783,8 +785,6 @@ export function useSavedShops(session: Session | undefined) {
     retry: false,
   });
 }
-
-// ---------------------------------------------------------------------------
 // Shop reports: clients report a shop to admins.
 // ---------------------------------------------------------------------------
 

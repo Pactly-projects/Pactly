@@ -48,7 +48,7 @@ function isBookingActive(booking: Pick<typeof bookings.$inferSelect, "escrowStat
   if (booking.escrowState !== null) {
     return booking.escrowState !== "refunded";
   }
-  return booking.holdExpiresAt !== null && booking.holdExpiresAt >= now;
+  return booking.holdExpiresAt !== null && booking.holdExpiresAt > now;
 }
 
 export interface ListFutureSlotsOptions {

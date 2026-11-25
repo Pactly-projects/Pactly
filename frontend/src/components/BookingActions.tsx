@@ -13,6 +13,7 @@ import {
   submitSignedTransaction,
   withdrawDispute,
 } from "../api/hooks";
+import { isDisputeWindowOpen } from "../lib/serverDispute";
 import { isFreeCancelOpen } from "../lib/serverCancel";
 import { LOCAL_CURRENCY_UNAVAILABLE_NOTE } from "../lib/money";
 import { getSession, signXdr, type Session } from "../wallet";
@@ -51,18 +52,20 @@ export interface BookingActionsProps {
   balance: Money;
   balanceState: BalanceState;
   /** UTC epoch seconds -- `null` for a pre-3.4 booking with no slot. Gates
-   * "Pay balance": the spec's own "Always" rule, "only before the
-   * appointment starts". */
+   * appointment-timed actions, including "Pay balance" and the dispute
+   * window. */
   slotStartsAt: number | null;
+  /** UTC epoch seconds calculated by the server; `null` when the slot time is unknown. */
+  disputeDeadline: number | null;
   /** UTC epoch seconds -- when the provider marked the client as arrived,
    * `null` until marked. */
   arrivedAt: number | null;
   /** UTC epoch seconds -- absent/null means no free-cancellation deadline
    * (no countdown; cancel stays available). */
   cancelDeadline?: number | null;
-  /** UTC epoch seconds from the booking payload. Together with
-   * `cancelDeadline`, decides whether the free-cancel action is still
-   * open -- never the browser clock alone. Resynced on each refetch. */
+  /** UTC epoch seconds from the booking payload. Drives cancellation and
+   * dispute-window display timing; never trust the browser clock alone.
+   * Resynced on each refetch. */
   serverTime?: number;
   session?: Session;
   /** Issue #44: the wallet address that opened the dispute (when one is
@@ -148,7 +151,8 @@ type WalletConfirm =
  * appointment complete" (provider, from `funded` only), "Approve" (client,
  * from `funded` or `completed`), "Release deposit" (provider, from
  * `approved`), and "Open a dispute" (either side, from any pre-dispute
- * state) -- each reuses 3.4's own `signXdr` + `submitSignedTransaction`
+ * state during the seven days starting at the appointment) -- each reuses
+ * 3.4's own `signXdr` + `submitSignedTransaction`
  * pair. Shared by `BookingCard.tsx` (My bookings, and the panel's card view
  * below 1024px) and `BookingsPage.tsx`'s desktop table, so the
  * sign-and-submit flow for every action lives in exactly one place. No
@@ -167,6 +171,7 @@ export function BookingActions({
   balance,
   balanceState,
   slotStartsAt,
+  disputeDeadline,
   arrivedAt,
   cancelDeadline,
   serverTime,
@@ -191,13 +196,13 @@ export function BookingActions({
 
   useEffect(() => {
     setSyncedAtMs(Date.now());
-  }, [serverTime, cancelDeadline]);
+  }, [serverTime, cancelDeadline, slotStartsAt]);
 
   useEffect(() => {
-    if (cancelDeadline == null || serverTime == null) return;
+    if (serverTime == null) return;
     const interval = setInterval(() => setTick((n) => n + 1), 1_000);
     return () => clearInterval(interval);
-  }, [cancelDeadline, serverTime]);
+  }, [serverTime]);
   /** Review follow-up (item 8): an ambiguous `PAYMENT_UNAVAILABLE` after the
    * client already signed means Pactly itself does not yet know whether the
    * payment landed -- "Pay balance" stays hidden/disabled until a refetch
@@ -489,7 +494,8 @@ export function BookingActions({
   const canComplete = canAct && viewer === "provider" && action === "funded";
   const canApprove = canAct && viewer === "client" && (action === "funded" || action === "completed");
   const canRelease = canAct && viewer === "provider" && action === "approved";
-  const canDispute = canAct && action !== "disputed" && action !== "released" && action !== "resolved";
+  const canOpenAction = canAct && action !== "disputed" && action !== "released" && action !== "resolved";
+  const canDispute = canOpenAction && isDisputeWindowOpen({ slotStartsAt, disputeDeadline, serverTime, syncedAtMs });
   // A missing deadline means there is no free-cancel window to gate on --
   // the cancel shortcut stays available. When both values are present,
   // openness follows the server clock (plus local elapsed since sync).
@@ -498,7 +504,7 @@ export function BookingActions({
       ? true
       : isFreeCancelOpen({ cancelDeadline, serverTime, syncedAtMs });
   const freeWindowEnded = cancelDeadline != null && serverTime != null && !freeCancelOpen;
-  const canFreeCancel = canDispute && freeCancelOpen;
+  const canFreeCancel = canOpenAction && freeCancelOpen;
   const hasBalanceToPay = balance.amount !== "0";
   const appointmentNotStarted = slotStartsAt === null || slotStartsAt > Math.floor(Date.now() / 1000);
   const canPayBalance = canAct && viewer === "client" && balanceState === "unpaid" && hasBalanceToPay && appointmentNotStarted && !verifyingBalance;
@@ -568,6 +574,7 @@ export function BookingActions({
     !canApprove &&
     !canRelease &&
     !canDispute &&
+    !canFreeCancel &&
     !canPayBalance &&
     !canMarkCash &&
     !canMarkArrived &&
@@ -598,12 +605,12 @@ export function BookingActions({
           onCancel={() => setWalletConfirm(undefined)}
         />
       )}
-      {freeWindowEnded && canDispute && disputeStep.kind === "idle" && (
+      {freeWindowEnded && canOpenAction && disputeStep.kind === "idle" && (
         <p className="booking-card__notice" aria-live="polite">
           The free-cancellation window has ended.
         </p>
       )}
-      {disputeStep.kind === "idle" && (canComplete || canApprove || canRelease || canDispute) && (
+      {disputeStep.kind === "idle" && (canComplete || canApprove || canRelease || canDispute || canFreeCancel) && (
         <div className="booking-card__actions">
           {canComplete && (
             <button
@@ -635,7 +642,7 @@ export function BookingActions({
               {busyAction === "release" ? "Confirm with your passkey…" : "Release deposit"}
             </button>
           )}
-          {canDispute && (
+          {(canDispute || canFreeCancel) && (
             <>
               {canFreeCancel && (
                 <button
@@ -651,9 +658,11 @@ export function BookingActions({
                   {busyAction === "dispute" ? "Opening…" : "Cancel booking"}
                 </button>
               )}
-              <button type="button" className="button-ghost" disabled={isBusy} aria-label="Open a dispute" onClick={() => setDisputeStep({ kind: "picking-reason" })}>
-                Open a dispute
-              </button>
+              {canDispute && (
+                <button type="button" className="button-ghost" disabled={isBusy} aria-label="Open a dispute" onClick={() => setDisputeStep({ kind: "picking-reason" })}>
+                  Open a dispute
+                </button>
+              )}
             </>
           )}
         </div>

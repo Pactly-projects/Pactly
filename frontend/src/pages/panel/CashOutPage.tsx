@@ -154,7 +154,7 @@ export function CashOutPage() {
           title="Cash out"
           lede="Sign in to move your released money to your bank."
         />
-        <SignInPanel onSignedIn={setSession} />
+        <SignInPanel onSignedIn={setSession} onRateLimited={(waitMs) => setError(`Too many failed sign-in attempts. Please wait ${Math.ceil(waitMs / 1000)} second${Math.ceil(waitMs / 1000) !== 1 ? "s" : ""} before trying again.`)} />
       </div>
     );
   }

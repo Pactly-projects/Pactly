@@ -1,8 +1,10 @@
-import { stellarExplorerContractUrl, stellarExplorerTransactionUrl, trustlessWorkViewerUrl } from "../lib/stellar";
+import { formatSlotTime, stellarExplorerContractUrl, stellarExplorerTransactionUrl, trustlessWorkViewerUrl } from "../lib/stellar";
 
 export interface EscrowProofProps {
   contractId?: string;
   txHash?: string;
+  serviceName?: string;
+  slotStartsAt?: number;
 }
 
 /** DESIGN.md's `Escrow proof`: a secondary mono label under the funded
@@ -13,10 +15,20 @@ export interface EscrowProofProps {
  * Viewer (roles, milestones, balances read straight from its read model).
  * Always secondary evidence, never a competing CTA -- rendered as plain
  * text and links, never a button. */
-export function EscrowProof({ contractId, txHash }: EscrowProofProps) {
+export function EscrowProof({ contractId, txHash, serviceName, slotStartsAt }: EscrowProofProps) {
   return (
     <p className="escrow-proof">
       <span>DEPOSIT HELD IN ESCROW BY TRUSTLESS WORK</span>
+      {serviceName && (
+        <span className="escrow-proof__service">
+          {serviceName}
+          {slotStartsAt !== undefined && (
+            <span className="escrow-proof__slot">
+              · {formatSlotTime(slotStartsAt)}
+            </span>
+          )}
+        </span>
+      )}
       {contractId && (
         <a href={stellarExplorerContractUrl(contractId)} target="_blank" rel="noreferrer">
           View escrow record &#8599;
@@ -31,6 +43,11 @@ export function EscrowProof({ contractId, txHash }: EscrowProofProps) {
         <a href={trustlessWorkViewerUrl(contractId)} target="_blank" rel="noreferrer">
           View in Escrow Viewer &#8599;
         </a>
+      )}
+      {!serviceName && (
+        <span className="escrow-proof__missing-service">
+          Service not recorded
+        </span>
       )}
     </p>
   );

@@ -16,6 +16,8 @@ export interface Category {
 
 export interface CloseProviderDateResponse {
   date: string;
+  endDate: string;
+  dayCount: number;
   /** UTC epoch seconds of the local day's start/end. */
   rangeStart: number;
   rangeEnd: number;
@@ -67,6 +69,10 @@ export interface ProviderProfile {
   bookingsPaused: boolean;
   /** Issues #64/#65: the shop's IANA timezone for slot labels and breaks. */
   timezone: string;
+  /** Issue #140: true when shop has been suspended by an administrator. */
+  isSuspended?: boolean;
+  /** Issue #140: admin's reason for the suspension, if suspended. */
+  suspensionReason?: string | null;
   /** UTC epoch seconds, ascending. */
   slots: number[];
   /** Issue #65: present on the owner's own profile only. */
@@ -151,6 +157,8 @@ export interface DiscoverFiltersParams {
   maxPrice?: string;
   maxDepositBps?: number;
   when?: DiscoverAvailability;
+  /** Issue #138: sort order, e.g. "soonest" / "next-slot" vs "default" */
+  sort?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +242,7 @@ export interface BookingView {
   balance: Money;
   price: Money;
   slotStartsAt: number | null;
+  disputeDeadline: number | null;
   cancelDeadline: number;
   /** UTC epoch seconds -- server clock at response time. Resynced on every
    * refetch so the free-cancellation countdown stays aligned with the
@@ -244,6 +253,9 @@ export interface BookingView {
    * through Pactly (`null` for unpaid or paid-in-cash) -- drives the
    * balance row's own Stellar Expert link. */
   balancePaymentTxHash: string | null;
+  /** The anchor's transaction id for the local-currency deposit, `null`
+   * when none was started. Client and shop only. */
+  anchorTransactionId: string | null;
   /** Story 3.8: the client's private note on this booking (visible to the
    * shop and the client on the booking detail page, never on the public
    * profile or discovery). */
@@ -269,6 +281,7 @@ export interface BookingListItemBase {
   id: string;
   /** UTC epoch seconds -- `null` only for a pre-3.4 booking with no slot. */
   slotStartsAt: number | null;
+  disputeDeadline: number | null;
   deposit: Money;
   balance: Money;
   price: Money;
@@ -279,6 +292,9 @@ export interface BookingListItemBase {
   /** Story 3.7: the on-chain transaction hash once the balance was paid
    * through Pactly (`null` for unpaid or paid-in-cash). */
   balancePaymentTxHash: string | null;
+  /** The anchor's transaction id for the local-currency deposit, `null`
+   * when none was started. Client and shop only. */
+  anchorTransactionId: string | null;
   /** UTC epoch seconds. */
   cancelDeadline: number;
   /** UTC epoch seconds -- server clock at response time. */
@@ -401,6 +417,12 @@ export interface AdminDisputeListItem {
   clientWalletAddress: string;
   /** UTC epoch seconds -- `null` only for a pre-3.4 booking with no slot. */
   slotStartsAt: number | null;
+  /** Free-text note the opener attached (may be empty, max 500 chars,
+   * leading/trailing spaces trimmed before count). */
+  note?: string;
+  /** SHA-256 hex evidence hash the opener attached (64 lowercase hex chars,
+   * displayed as plain text, not a clickable link). */
+  evidenceHash?: string;
   /** Story 3.6 (review round): `"resolve"` while an admin's resolve is
    * already awaiting chain confirmation for this booking -- the admin UI
    * hides/disables the row rather than let a second resolve be built. */

@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { createApp } from "../src/app.js";
 import { issueMoneyAssertionToken } from "../src/auth/assertion.js";
 import { issuePactlyJwt } from "../src/auth/challenge.js";
-import { getBookingById, updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
+import { getBookingById, setPendingDispute, updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
 import { insertEscrowProcessedEventIfNew } from "../src/db/escrowProcessedEvents.js";
 import type { EscrowAdapter } from "../src/escrow/interface.js";
 import { closeDatabase, openTestDatabase, seedBooking, seedProviderProfile } from "./helpers.js";
@@ -76,12 +76,24 @@ function fakeEscrowAdapter(overrides: Partial<EscrowAdapter> = {}): EscrowAdapte
  * hold-expiry tests). */
 async function seedLockedBooking(
   result: Awaited<ReturnType<typeof openTestDatabase>>,
-  options: { clientWalletAddress?: string; providerWalletAddress?: string; lifecycleAction?: "funded" | "completed" | "approved" | "disputed" } = {},
+  options: {
+    clientWalletAddress?: string;
+    providerWalletAddress?: string;
+    slotStartsAt?: number;
+    cancelDeadline?: number;
+    lifecycleAction?: "funded" | "completed" | "approved" | "disputed";
+  } = {},
 ): Promise<{ bookingId: string; contractId: string; clientWalletAddress: string; providerWalletAddress: string }> {
   const clientWalletAddress = options.clientWalletAddress ?? Keypair.random().publicKey();
   const providerWalletAddress = options.providerWalletAddress ?? Keypair.random().publicKey();
   const providerProfileId = await seedProviderProfile(result, { walletAddress: providerWalletAddress });
-  const bookingId = await seedBooking(result, { providerProfileId, clientWalletAddress });
+  const slotStartsAt = options.slotStartsAt ?? Math.floor(Date.now() / 1000) - 3600;
+  const bookingId = await seedBooking(result, {
+    providerProfileId,
+    clientWalletAddress,
+    slotStartsAt,
+    cancelDeadline: options.cancelDeadline ?? slotStartsAt - 24 * 3600,
+  });
   const contractId = fakeContractId();
   await updateEscrowContractId(result.db, bookingId, contractId);
   updateEscrowStateSync(result.db, bookingId, "locked");
@@ -708,6 +720,128 @@ test("POST /bookings/:id/dispute: 200 from 'completed' and from 'approved', not 
       body: JSON.stringify({ reason: "disagreement" }),
     });
     assert.equal(fromApproved.status, 200);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("POST /bookings/:id/dispute: 409 after the appointment dispute window has closed", async () => {
+  const result = openTestDatabase();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const booking = await seedLockedBooking(result, { slotStartsAt: now - 8 * 24 * 3600 });
+    let startDisputeCalled = false;
+    const app = createApp(result.db, {
+      escrowAdapter: fakeEscrowAdapter({
+        startDispute: async () => {
+          startDisputeCalled = true;
+          return { unsignedXdr: "x", txHash: "late-dispute" };
+        },
+      }),
+    });
+    const response = await app.request(`/bookings/${booking.bookingId}/dispute`, {
+      method: "POST",
+      headers: await authHeader(booking.clientWalletAddress),
+      body: JSON.stringify({ reason: "disagreement" }),
+    });
+    assert.equal(response.status, 409);
+    assert.equal(((await response.json()) as { code: string }).code, "DISPUTE_WINDOW_CLOSED");
+    assert.equal(startDisputeCalled, false);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("GET /bookings/:id: includes a server-computed dispute deadline", async () => {
+  const result = openTestDatabase();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const slotStartsAt = now - 6 * 24 * 3600;
+    const booking = await seedLockedBooking(result, { slotStartsAt });
+    const app = createApp(result.db, { escrowAdapter: fakeEscrowAdapter() });
+    const response = await app.request(`/bookings/${booking.bookingId}`, {
+      headers: await authHeader(booking.clientWalletAddress),
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { slotStartsAt: number; disputeDeadline: number };
+    assert.equal(body.slotStartsAt, slotStartsAt);
+    assert.equal(body.disputeDeadline, slotStartsAt + 7 * 24 * 3600);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("POST /bookings/:id/dispute: 409 before the appointment and when no slot time is recorded", async () => {
+  const result = openTestDatabase();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const app = createApp(result.db, { escrowAdapter: fakeEscrowAdapter() });
+    const beforeAppointment = await seedLockedBooking(result, { slotStartsAt: now + 60 });
+    const early = await app.request(`/bookings/${beforeAppointment.bookingId}/dispute`, {
+      method: "POST",
+      headers: await authHeader(beforeAppointment.clientWalletAddress),
+      body: JSON.stringify({ reason: "disagreement" }),
+    });
+    assert.equal(early.status, 409);
+    assert.equal(((await early.json()) as { code: string }).code, "DISPUTE_WINDOW_CLOSED");
+
+    const providerWalletAddress = Keypair.random().publicKey();
+    const providerProfileId = await seedProviderProfile(result, { walletAddress: providerWalletAddress });
+    const clientWalletAddress = Keypair.random().publicKey();
+    const bookingId = await seedBooking(result, { providerProfileId, clientWalletAddress });
+    const contractId = fakeContractId();
+    await updateEscrowContractId(result.db, bookingId, contractId);
+    updateEscrowStateSync(result.db, bookingId, "locked");
+    await insertEscrowProcessedEventIfNew(result.db, {
+      bookingId,
+      contractId,
+      lifecycleAction: "funded",
+      amount: "1000000",
+      ledgerSeq: "1",
+      isAnomaly: false,
+      processedAt: Date.now(),
+    });
+    const missingSlot = await app.request(`/bookings/${bookingId}/dispute`, {
+      method: "POST",
+      headers: await authHeader(clientWalletAddress),
+      body: JSON.stringify({ reason: "disagreement" }),
+    });
+    assert.equal(missingSlot.status, 409);
+    assert.equal(((await missingSlot.json()) as { code: string }).code, "DISPUTE_WINDOW_CLOSED");
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("POST /bookings/:id/submit: refuses a late dispute before relaying it", async () => {
+  const result = openTestDatabase();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const booking = await seedLockedBooking(result, { slotStartsAt: now - 8 * 24 * 3600 });
+    const transaction = buildFakeTransactionXdr();
+    await setPendingDispute(result.db, booking.bookingId, {
+      txHash: transaction.hash,
+      reason: "disagreement",
+      openerWallet: booking.clientWalletAddress,
+      openerRole: "client",
+    });
+    let submitCalled = false;
+    const app = createApp(result.db, {
+      escrowAdapter: fakeEscrowAdapter({
+        submit: async () => {
+          submitCalled = true;
+          return { txHash: "late-dispute-submit" };
+        },
+      }),
+    });
+    const response = await app.request(`/bookings/${booking.bookingId}/submit`, {
+      method: "POST",
+      headers: await authHeader(booking.clientWalletAddress),
+      body: JSON.stringify({ signedXdr: transaction.xdr }),
+    });
+    assert.equal(response.status, 409);
+    assert.equal(((await response.json()) as { code: string }).code, "DISPUTE_WINDOW_CLOSED");
+    assert.equal(submitCalled, false);
   } finally {
     closeDatabase(result);
   }

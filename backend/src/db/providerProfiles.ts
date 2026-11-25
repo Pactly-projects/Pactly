@@ -187,6 +187,8 @@ export async function listApprovedProviderProfilesForDiscover(
       maxBookingDaysAhead: providerProfiles.maxBookingDaysAhead,
       bufferMinutes: providerProfiles.bufferMinutes,
       isApproved: providerProfiles.isApproved,
+      suspendedAt: providerProfiles.suspendedAt,
+      suspensionReason: providerProfiles.suspensionReason,
       bookingsPaused: providerProfiles.bookingsPaused,
       suspendedAt: providerProfiles.suspendedAt,
       suspensionReason: providerProfiles.suspensionReason,
@@ -262,7 +264,8 @@ export function setProviderProfileApprovedSync(db: DbOrTx, id: string, isApprove
   }
 }
 
-/** Issue #62: the shop's own pause/resume of new bookings. */
+/** Issue #62: the shop's own pause/resume of new bookings. Idempotent --
+ * pausing an already-paused shop simply writes `true` again. */
 export async function setProviderProfileBookingsPaused(db: Db, id: string, bookingsPaused: boolean): Promise<void> {
   const result = await db.update(providerProfiles).set({ bookingsPaused }).where(eq(providerProfiles.id, id));
   if (result.changes === 0) {
@@ -270,12 +273,22 @@ export async function setProviderProfileBookingsPaused(db: Db, id: string, booki
   }
 }
 
+/** Issue #64: writes the shop's own IANA timezone. Only ever changes the
+ * label a slot is rendered with -- the stored `starts_at` instants are not
+ * touched. */
+export async function updateProviderProfileTimezone(db: Db, id: string, timezone: string): Promise<void> {
+  const result = await db.update(providerProfiles).set({ timezone }).where(eq(providerProfiles.id, id));
+  if (result.changes === 0) {
+    throw new TypeError(`No provider profile exists with id "${id}"`);
+  }
+}
+
 export interface ProviderProfileSuspension {
+  /** UTC epoch milliseconds, like every `createdAt` in the schema. */
   suspendedAt: number;
   reason: string;
 }
 
-/** Admin suspension: `null` clears both the timestamp and its reason. */
 export async function setProviderProfileSuspension(
   db: Db,
   id: string,
@@ -288,14 +301,6 @@ export async function setProviderProfileSuspension(
       suspensionReason: suspension?.reason ?? null,
     })
     .where(eq(providerProfiles.id, id));
-  if (result.changes === 0) {
-    throw new TypeError(`No provider profile exists with id "${id}"`);
-  }
-}
-
-/** Issue #64: the shop's IANA timezone. */
-export async function updateProviderProfileTimezone(db: Db, id: string, timezone: string): Promise<void> {
-  const result = await db.update(providerProfiles).set({ timezone }).where(eq(providerProfiles.id, id));
   if (result.changes === 0) {
     throw new TypeError(`No provider profile exists with id "${id}"`);
   }

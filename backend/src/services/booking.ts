@@ -41,7 +41,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { TransactionBuilder } from "@stellar/stellar-sdk";
-import { eq } from "drizzle-orm";
+import { and, eq, gte, isNotNull, isNull, ne, or } from "drizzle-orm";
 
 import { config } from "../config.js";
 import { isWithinBookingWindow } from "./bookingWindow.js";
@@ -101,6 +101,7 @@ import {
   listOfferedSlotsInRange,
 } from "./availability.js";
 import { recordEscrowDisputeResolution } from "../db/escrowDisputeResolutions.js";
+import { listContractDeployments, recordContractDeployment } from "../db/escrowContractDeployments.js";
 import { escrowDisputeOpenings, bookings } from "../db/schema.js";
 import { getEscrowDisputeOpening, getEscrowDisputeOpeningsForBookings, recordEscrowDisputeOpening } from "../db/escrowDisputeOpenings.js";
 import { getProviderProfileById, getProviderProfileByWallet } from "../db/providerProfiles.js";
@@ -214,6 +215,11 @@ export interface BookingProviderSummary {
 /** The AD-13 hold's own duration -- 10 minutes, per the spec's "Always"
  * rule ("blocks the slot for 10 minutes"). */
 export const HOLD_DURATION_SECONDS = 10 * 60;
+const DISPUTE_OPEN_WINDOW_SECONDS = 7 * 24 * 60 * 60;
+
+function getDisputeDeadline(slotStartsAt: number | null): number | null {
+  return slotStartsAt === null ? null : slotStartsAt + DISPUTE_OPEN_WINDOW_SECONDS;
+}
 
 /** Issue #62: the shop has paused new bookings. A new hold is refused
  * (`409 BOOKINGS_PAUSED`); existing locks, releases and disputes never
@@ -584,6 +590,13 @@ export class BookingEscrowStateError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "BookingEscrowStateError";
+  }
+}
+
+export class DisputeWindowClosedError extends Error {
+  constructor(message = "A dispute may only be opened from the appointment time until 7 days afterward.") {
+    super(message);
+    this.name = "DisputeWindowClosedError";
   }
 }
 
@@ -1444,6 +1457,25 @@ export interface OpenDisputeResult extends UnsignedTransaction {
   evidenceHash?: string;
 }
 
+async function requireDisputeWindowOpen(
+  db: Db,
+  booking: Pick<BookingRow, "slotId">,
+  reason: DisputeReason,
+  now: number,
+): Promise<void> {
+  const slot = booking.slotId ? await getSlotById(db, booking.slotId) : undefined;
+  if (!slot) {
+    throw new DisputeWindowClosedError();
+  }
+  if (now < slot.startsAt && (reason === "client-cancel" || reason === "provider-cancel")) {
+    return;
+  }
+  const deadline = getDisputeDeadline(slot.startsAt);
+  if (deadline === null || now < slot.startsAt || now > deadline) {
+    throw new DisputeWindowClosedError();
+  }
+}
+
 /**
  * "Dispute" (client or provider): either side may raise one while the
  * booking is `locked` and no dispute is already open for it -- refused
@@ -1456,7 +1488,9 @@ export interface OpenDisputeResult extends UnsignedTransaction {
  * `reason` outside the caller's own role's whitelist. Refused (typed
  * {@link BookingActionPendingError}) while an earlier dispute build for this
  * booking has already been submitted and the lifecycle has not yet observed
- * it. Pactly itself never opens a dispute (Story 1.8 AC7): `signerAddress`
+ * it. The linked appointment must have started and be within seven days;
+ * the same server-time check runs again before a signed dispute is relayed.
+ * Pactly itself never opens a dispute (Story 1.8 AC7): `signerAddress`
  * is always the caller's own wallet, one of the two parties, never Pactly's.
  *
  * Review round: building the XDR no longer writes `escrow_dispute_openings`
@@ -1486,6 +1520,10 @@ export async function openDispute(
   if (evidenceHash !== "" && !/^[0-9a-f]{64}$/.test(evidenceHash)) {
     throw new InvalidDisputeReasonError("The evidence hash must be 64 lowercase hex characters.");
   }
+  const trimmedNote = note?.trim();
+  if (trimmedNote !== undefined && trimmedNote.length > 500) {
+    throw new InvalidDisputeReasonError("The dispute note must be 500 characters or less.");
+  }
   if (booking.escrowState !== "locked" || !booking.escrowContractId) {
     throw new BookingEscrowStateError(
       `Booking "${bookingId}" must be locked with a persisted escrow contractId to open a dispute (escrowState is "${booking.escrowState}")`,
@@ -1503,6 +1541,7 @@ export async function openDispute(
   if (lifecycle.action === "disputed") {
     throw new BookingEscrowStateError(`Booking "${bookingId}" already has an open dispute`);
   }
+  await requireDisputeWindowOpen(db, booking, reason, now);
   if ((reason === "client-no-show" || reason === "provider-no-show") && now <= booking.cancelDeadline) {
     throw new BookingActionPendingError(
       `No-show can only be claimed after the cancellation deadline.`,
@@ -1511,10 +1550,10 @@ export async function openDispute(
   const result = await adapter.startDispute({ contractId: booking.escrowContractId, signerAddress: walletAddress, reason });
   const suggestedOutcome = computeSuggestedOutcome(reason, booking, now);
   const providerAddress = await requireProviderAddress(db, booking);
-  await setPendingDispute(db, bookingId, { txHash: result.txHash, reason, openerWallet: walletAddress, openerRole: role, note: note || undefined, evidenceHash: evidenceHash || undefined });
+  await setPendingDispute(db, bookingId, { txHash: result.txHash, reason, openerWallet: walletAddress, openerRole: role, note: trimmedNote || undefined, evidenceHash: evidenceHash || undefined });
   // Issue #31: record a "dispute" event for both parties.
   await recordEscrowEventForBothParties(db, booking.id, booking.clientWalletAddress, providerAddress, "dispute", now);
-  return { ...result, reason, suggestedOutcome, note: note || undefined, evidenceHash: evidenceHash || undefined };
+  return { ...result, reason, suggestedOutcome, note: trimmedNote || undefined, evidenceHash: evidenceHash || undefined };
 }
 
 export interface AdminDisputeListItem {
@@ -2041,6 +2080,7 @@ export interface BookingView {
   balance: Money;
   price: Money;
   slotStartsAt: number | null;
+  disputeDeadline: number | null;
   cancelDeadline: number;
   /** UTC epoch seconds -- the server clock at response time. Resynced on
    * every refetch so the client's free-cancellation countdown stays
@@ -2052,10 +2092,21 @@ export interface BookingView {
    * no transaction to point at). Drives the balance row's own Stellar
    * Expert link, per the spec's own "Always" rule. */
   balancePaymentTxHash: string | null;
+  /** The anchor's own transaction id for the local-currency (SEP-6)
+   * deposit that funds this booking, `null` when none was started. Lets
+   * support tie a failed or partial deposit back to the booking. Shown to
+   * the booking's client and shop only -- never on the public profile or
+   * proof page. */
+  anchorTransactionId: string | null;
   /** Story 3.8: the client's private note on this booking (visible to the
    * shop and the client on the booking detail page, never on the public
    * profile or discovery). */
   note: string | null;
+  /** Set only when the shop closed this date and released this unpaid
+   * hold early (`shop-closed-date`); `null` for a plain expiry or a locked
+   * booking. Drives the client's "the shop closed this date, no deposit was
+   * taken" copy. */
+  holdReleasedReason: BookingRow["holdReleaseReason"];
   /** Issue #35: true when this read triggered showing a reminder (appointment
    * day-before notice). False when already shown or conditions not met. */
   reminderShown: boolean;
@@ -2128,13 +2179,16 @@ export async function getBookingView(
     balance: { amount: booking.balanceAmount, asset: ASSET },
     price: { amount: (BigInt(booking.depositAmount) + BigInt(booking.balanceAmount)).toString(), asset: ASSET },
     slotStartsAt,
+    disputeDeadline: getDisputeDeadline(slotStartsAt),
     cancelDeadline: booking.cancelDeadline,
     serverTime: now,
     provider: profile
       ? { id: profile.id, displayName: profile.displayName, title: profile.title }
       : { id: booking.providerProfileId, displayName: "", title: "" },
     balancePaymentTxHash: booking.balancePaymentTxHash,
+    anchorTransactionId: booking.anchorDepositId,
     note: booking.note,
+    holdReleasedReason: booking.holdReleaseReason,
     reminderShown,
     disputeOpenedByWallet,
   };
@@ -2284,6 +2338,13 @@ export async function submitSignedTransaction(
     throw new XdrMismatchError();
   }
 
+  if (match.kind === "dispute") {
+    if (!booking.pendingDisputeReason) {
+      throw new BookingEscrowStateError("This dispute has no recorded reason.");
+    }
+    await requireDisputeWindowOpen(db, booking, booking.pendingDisputeReason, now);
+  }
+
   const result = await adapter.submit(signedXdr);
 
   if (match.kind === "deploy" && booking.escrowContractId && booking.escrowDeployTxHash) {
@@ -2379,6 +2440,7 @@ export interface BookingListItemBase {
   /** UTC epoch seconds -- `null` only for a pre-3.4 booking with no
    * `slotId`. */
   slotStartsAt: number | null;
+  disputeDeadline: number | null;
   deposit: Money;
   balance: Money;
   price: Money;
@@ -2390,6 +2452,12 @@ export interface BookingListItemBase {
   /** Story 3.7: the on-chain transaction hash once the balance was paid
    * through Pactly (`null` for unpaid or paid-in-cash). */
   balancePaymentTxHash: string | null;
+  /** The anchor's own transaction id for the local-currency (SEP-6)
+   * deposit that funds this booking, `null` when none was started. Lets
+   * support tie a failed or partial deposit back to the booking. Shown to
+   * the booking's client and shop only -- never on the public profile or
+   * proof page. */
+  anchorTransactionId: string | null;
   cancelDeadline: number;
   /** UTC epoch seconds -- the server clock at response time. */
   serverTime: number;
@@ -2458,6 +2526,7 @@ function toBookingListItemBase(
   return {
     id: booking.id,
     slotStartsAt,
+    disputeDeadline: getDisputeDeadline(slotStartsAt),
     deposit: { amount: booking.depositAmount, asset: ASSET },
     balance: { amount: booking.balanceAmount, asset: ASSET },
     price: { amount: (BigInt(booking.depositAmount) + BigInt(booking.balanceAmount)).toString(), asset: ASSET },
@@ -2466,6 +2535,7 @@ function toBookingListItemBase(
     pendingAction: derivePendingAction(booking, lifecycle?.action),
     balanceState: booking.balanceState,
     balancePaymentTxHash: booking.balancePaymentTxHash,
+    anchorTransactionId: booking.anchorDepositId,
     cancelDeadline: booking.cancelDeadline,
     serverTime: now,
     contractId: booking.escrowContractId,
@@ -2587,70 +2657,89 @@ export async function listBookingsForProvider(
   return items;
 }
 
-// ---------------------------------------------------------------------------
-// Issue #163: the shop's week, with returned and released deposits kept as
-// two separate totals. A booking is only ever in one of them: `refunded` is
-// money that came back to the client, `released` is money that settled to
-// the shop. Every other state (locked, disputed, an unpaid hold) is in
-// neither. Amounts are read from the booking's own stored `deposit_amount`
-// (AD-7 integer strings), summed with BigInt so no precision is lost, and
-// never recomputed from the price.
-// ---------------------------------------------------------------------------
+export type SlotUnbookableReason = "past" | "too soon" | "buffered" | "held" | "closed" | "paused";
 
-export interface DepositWeekTotalsView {
-  /** UTC epoch seconds, inclusive. */
-  weekStart: number;
-  /** UTC epoch seconds, inclusive. */
-  weekEnd: number;
-  returned: { amount: string; asset: string };
-  released: { amount: string; asset: string };
-}
-
-export interface DepositWeekTotalsRow {
-  booking: { escrowState: BookingRow["escrowState"]; depositAmount: string };
-  slotStartsAt: number | null;
-}
-
-/** Pure: sums a shop's returned and released deposits for one week. */
-export function computeDepositWeekTotals(
-  rows: readonly DepositWeekTotalsRow[],
-  weekStart: number,
-  weekEnd: number,
-): DepositWeekTotalsView {
-  let returned = 0n;
-  let released = 0n;
-  for (const { booking, slotStartsAt } of rows) {
-    if (slotStartsAt === null || slotStartsAt < weekStart || slotStartsAt > weekEnd) {
-      continue;
-    }
-    if (booking.escrowState === "refunded") {
-      returned += BigInt(booking.depositAmount);
-    } else if (booking.escrowState === "released") {
-      released += BigInt(booking.depositAmount);
-    }
-  }
-  const asset = DEPOSIT_ASSET_SYMBOL;
-  return {
-    weekStart,
-    weekEnd,
-    returned: { amount: returned.toString(), asset },
-    released: { amount: released.toString(), asset },
-  };
-}
-
-/** `GET /me/provider/deposit-week-totals`: the caller's own shop, over the
- * seven days ending at `now`. The totals use only the bookings' own stored
- * amounts, never a recomputed one. */
-export async function getProviderDepositWeekTotals(
+/**
+ * Issue #141: Returns why a slot cannot be booked, or null if it is bookable.
+ * Checked strictly in this order:
+ * 1. "past": slotStartsAt <= now
+ * 2. "too soon": within provider's minimumNoticeMinutes
+ * 3. "buffered": inside the provider's buffer window after a locked booking
+ * 4. "held": another active booking/hold already occupies the slot
+ * 5. "closed": provider marked the date as closed
+ * 6. "paused": provider has paused new bookings
+ */
+export async function getSlotUnbookableReason(
   db: Db,
-  walletAddress: string,
+  providerProfileId: string,
+  slotStartsAt: number,
   now: number = Math.floor(Date.now() / 1000),
-): Promise<DepositWeekTotalsView> {
-  const profile = await getProviderProfileByWallet(db, walletAddress);
+): Promise<SlotUnbookableReason | null> {
+  const profile = await getProviderProfileById(db, providerProfileId);
   if (!profile) {
-    throw new NotAProviderError();
+    throw new ProviderNotFoundError();
   }
-  const weekStart = now - 7 * 24 * 60 * 60;
-  const rows = await listBookingRowsForProviderInRange(db, profile.id, weekStart, now);
-  return computeDepositWeekTotals(rows, weekStart, now);
+
+  // 1. past
+  if (slotStartsAt <= now) {
+    return "past";
+  }
+
+  // 2. too soon
+  if (profile.minimumNoticeMinutes && profile.minimumNoticeMinutes > 0) {
+    const minStart = now + profile.minimumNoticeMinutes * 60;
+    if (slotStartsAt < minStart) {
+      return "too soon";
+    }
+  }
+
+  // 3. buffered
+  if (profile.bufferMinutes && profile.bufferMinutes > 0) {
+    const lockedStarts = await listLockedBookingStarts(db, profile.id);
+    const buffered = lockedStarts.some((lockedStartsAt) =>
+      isSlotInsideBufferAfterLocked(
+        slotStartsAt,
+        lockedStartsAt,
+        profile.sessionLengthMinutes,
+        profile.bufferMinutes,
+      ),
+    );
+    if (buffered) {
+      return "buffered";
+    }
+  }
+
+  // 4. held
+  const slot = await getSlotByProviderAndStart(db, profile.id, slotStartsAt);
+  if (slot) {
+    const activeBookings = await db
+      .select({ id: bookings.id })
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.slotId, slot.id),
+          or(
+            and(isNotNull(bookings.escrowState), ne(bookings.escrowState, "refunded")),
+            and(isNull(bookings.escrowState), gte(bookings.holdExpiresAt, now)),
+          ),
+        ),
+      )
+      .limit(1);
+    if (activeBookings.length > 0) {
+      return "held";
+    }
+  }
+
+  // 5. closed
+  if (await isDateClosed(db, profile.id, utcDateFor(slotStartsAt))) {
+    return "closed";
+  }
+
+  // 6. paused
+  if (profile.bookingsPaused) {
+    return "paused";
+  }
+
+  return null;
 }
+

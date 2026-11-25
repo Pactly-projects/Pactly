@@ -49,10 +49,14 @@ export function EmptyResults({
   suggestions,
   onBrowseCategory,
 }: EmptyResultsProps) {
+  // Issue #155: a query of only spaces is treated as empty -- never echo
+  // whitespace back as if it were something the client searched for.
+  const trimmedQuery = query.trim();
+
   return (
     <div className="empty-results banner">
       <p className="empty-results__heading">
-        {query ? <>No results for &ldquo;{query}&rdquo;.</> : "No providers match these filters."}
+        {trimmedQuery ? <>No results for &ldquo;{trimmedQuery}&rdquo;.</> : "No providers match these filters."}
       </p>
       <p className="empty-results__try">Try:</p>
       <ul className="empty-results__list">

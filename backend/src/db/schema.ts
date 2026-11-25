@@ -100,16 +100,18 @@ export const providerProfiles = sqliteTable("provider_profiles", {
    * offered (0-120). Does not change weekly hours or move existing locks. */
   bufferMinutes: integer("buffer_minutes").notNull().default(0),
   isApproved: integer("is_approved", { mode: "boolean" }).notNull().default(false),
+  suspendedAt: integer("suspended_at"),
+  suspensionReason: text("suspension_reason"),
   /** Issue #62: the shop's own pause on *new* bookings. Independent of
    * `isApproved` -- an admin suspension still hides the shop entirely, and
    * this pause never clears one. While `true`, discovery advertises the
    * shop as not taking bookings and `holdSlot` refuses a new hold; existing
    * bookings, locks, releases and disputes are untouched. */
   bookingsPaused: integer("bookings_paused", { mode: "boolean" }).notNull().default(false),
-  /** Admin suspension (issue #63): hidden from discovery while set; clearing
-   * both puts the shop back without a second approval step. */
-  suspendedAt: integer("suspended_at"),
-  suspensionReason: text("suspension_reason"),
+  /** Issue #145: optional/intake answers stored as JSON. Each entry has
+   * `questionId`, `questionText`, `isOptional`, and `answer`. Null answer
+   * means unanswered (only allowed when `isOptional` is true). */
+  intakeAnswers: text("intake_answers").notNull().default("[]"),
   /** Increases only on the chain's `released` event (FR20); never written
    * by hand outside the event worker's own bookkeeping. */
   verifiedSessionCount: integer("verified_session_count").notNull().default(0),
@@ -735,6 +737,10 @@ export const passkeyCredentials = sqliteTable("passkey_credentials", {
   /** JSON-encoded array of transport hints (`["internal"]`, ...). */
   transports: text("transports").notNull().default("[]"),
   createdAt: integer("created_at").notNull(),
+  /** Count of failed passkey prompt attempts. Reset on successful sign-in. */
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  /** Epoch ms when the failure counter was last reset. Used to compute wait time. */
+  failuresResetAt: integer("failures_reset_at"),
 });
 
 /**
@@ -888,26 +894,6 @@ export const waitlistEntries = sqliteTable(
 
 export type WaitlistEntryRow = typeof waitlistEntries.$inferSelect;
 
-/**
- * Issue #31: one in-app event row per party per booking-level action
- * (lock, release, dispute, resolve). A party only ever reads rows for their
- * own wallet on bookings they belong to.
- */
-export const escrowEvents = sqliteTable("escrow_events", {
-  id: text("id").primaryKey(),
-  bookingId: text("booking_id")
-    .notNull()
-    .references(() => bookings.id),
-  walletAddress: text("wallet_address").notNull(),
-  type: text("type", { enum: ["lock", "release", "dispute", "resolve"] }).notNull(),
-  createdAt: integer("created_at").notNull(),
-});
-
-/**
- * Issue #7: one row per escrow contract id a deploy ever returned for a
- * booking. Write-only alongside `bookings.escrow_contract_id`; settlement
- * always reads the booking row, so a superseded id can never move money.
- */
 export const escrowContractDeployments = sqliteTable(
   "escrow_contract_deployments",
   {
@@ -917,3 +903,5 @@ export const escrowContractDeployments = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.bookingId, table.contractId] })],
 );
+
+export type EscrowContractDeploymentRow = typeof escrowContractDeployments.$inferSelect;

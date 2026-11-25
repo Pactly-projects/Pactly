@@ -18,6 +18,7 @@ import { Account, Keypair, Networks, Operation, StrKey, TransactionBuilder } fro
 import {
   BookingEscrowStateError,
   BookingNotFoundError,
+  DisputeWindowClosedError,
   XdrMismatchError,
   approveAppointment,
   completeAppointment,
@@ -82,16 +83,19 @@ async function seedLockedBooking(
     clientWalletAddress?: string;
     providerWalletAddress?: string;
     cancelDeadline?: number;
+    slotStartsAt?: number;
     lifecycleAction?: "funded" | "completed" | "approved" | "disputed";
   } = {},
 ): Promise<{ bookingId: string; contractId: string; clientWalletAddress: string; providerWalletAddress: string }> {
   const clientWalletAddress = options.clientWalletAddress ?? Keypair.random().publicKey();
   const providerWalletAddress = options.providerWalletAddress ?? Keypair.random().publicKey();
   const providerProfileId = await seedProviderProfile(result, { walletAddress: providerWalletAddress });
+  const slotStartsAt = options.slotStartsAt ?? Math.floor(Date.now() / 1000) - 3600;
   const bookingId = await seedBooking(result, {
     providerProfileId,
     clientWalletAddress,
-    cancelDeadline: options.cancelDeadline ?? Math.floor(Date.now() / 1000) + 3600,
+    cancelDeadline: options.cancelDeadline ?? slotStartsAt - 24 * 3600,
+    slotStartsAt,
   });
   const contractId = fakeContractId();
   await updateEscrowContractId(result.db, bookingId, contractId);
@@ -489,6 +493,153 @@ test("openDispute: the provider can also open one, naming itself as the signer",
   }
 });
 
+test("openDispute: accepts day six and refuses day eight, including no-show disputes", async () => {
+  const result = openTestDatabase();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const adapter: EscrowAdapter = {
+      ...unreachableEscrowAdapter(),
+      startDispute: async () => ({ unsignedXdr: "x", txHash: `dispute-${Math.random()}` }),
+    };
+    const daySix = await seedLockedBooking(result, { slotStartsAt: now - 6 * 24 * 3600 });
+    const accepted = await openDispute(
+      result.db,
+      daySix.bookingId,
+      daySix.clientWalletAddress,
+      "disagreement",
+      adapter,
+      now,
+    );
+    assert.equal(accepted.reason, "disagreement");
+
+    const dayEight = await seedLockedBooking(result, { slotStartsAt: now - 8 * 24 * 3600 });
+    await assert.rejects(
+      () => openDispute(result.db, dayEight.bookingId, dayEight.clientWalletAddress, "disagreement", adapter, now),
+      DisputeWindowClosedError,
+    );
+
+    const beforeAppointment = await seedLockedBooking(result, { slotStartsAt: now + 60 });
+    await assert.rejects(
+      () => openDispute(result.db, beforeAppointment.bookingId, beforeAppointment.clientWalletAddress, "disagreement", adapter, now),
+      DisputeWindowClosedError,
+    );
+    const earlyClientCancel = await seedLockedBooking(result, {
+      slotStartsAt: now + 3600,
+      cancelDeadline: now + 1800,
+    });
+    const clientCancel = await openDispute(
+      result.db,
+      earlyClientCancel.bookingId,
+      earlyClientCancel.clientWalletAddress,
+      "client-cancel",
+      adapter,
+      now,
+    );
+    assert.equal(clientCancel.reason, "client-cancel");
+    const earlyNoShow = await seedLockedBooking(result, {
+      slotStartsAt: now + 3600,
+      cancelDeadline: now - 1,
+    });
+    await assert.rejects(
+      () => openDispute(result.db, earlyNoShow.bookingId, earlyNoShow.providerWalletAddress, "client-no-show", adapter, now),
+      DisputeWindowClosedError,
+    );
+
+    const noShowDayEight = await seedLockedBooking(result, { slotStartsAt: now - 8 * 24 * 3600 });
+    await assert.rejects(
+      () => openDispute(result.db, noShowDayEight.bookingId, noShowDayEight.providerWalletAddress, "client-no-show", adapter, now),
+      DisputeWindowClosedError,
+    );
+    const providerNoShowDaySix = await seedLockedBooking(result, { slotStartsAt: now - 6 * 24 * 3600 });
+    const providerNoShow = await openDispute(
+      result.db,
+      providerNoShowDaySix.bookingId,
+      providerNoShowDaySix.clientWalletAddress,
+      "provider-no-show",
+      adapter,
+      now,
+    );
+    assert.equal(providerNoShow.reason, "provider-no-show");
+    const providerNoShowDayEight = await seedLockedBooking(result, { slotStartsAt: now - 8 * 24 * 3600 });
+    await assert.rejects(
+      () => openDispute(
+        result.db,
+        providerNoShowDayEight.bookingId,
+        providerNoShowDayEight.clientWalletAddress,
+        "provider-no-show",
+        adapter,
+        now,
+      ),
+      DisputeWindowClosedError,
+    );
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("openDispute: accepts exactly at the appointment start and the end of day seven", async () => {
+  const result = openTestDatabase();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const adapter: EscrowAdapter = {
+      ...unreachableEscrowAdapter(),
+      startDispute: async () => ({ unsignedXdr: "x", txHash: `boundary-${Math.random()}` }),
+    };
+
+    const atAppointment = await seedLockedBooking(result, { slotStartsAt: now });
+    const atStart = await openDispute(
+      result.db,
+      atAppointment.bookingId,
+      atAppointment.clientWalletAddress,
+      "disagreement",
+      adapter,
+      now,
+    );
+    assert.equal(atStart.reason, "disagreement");
+
+    const exactlySevenDays = await seedLockedBooking(result, { slotStartsAt: now - 7 * 24 * 3600 });
+    const atEnd = await openDispute(
+      result.db,
+      exactlySevenDays.bookingId,
+      exactlySevenDays.clientWalletAddress,
+      "disagreement",
+      adapter,
+      now,
+    );
+    assert.equal(atEnd.reason, "disagreement");
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("submitSignedTransaction refuses a dispute built in time but submitted after day seven", async () => {
+  const result = openTestDatabase();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const slotStartsAt = now - 6 * 24 * 3600;
+    const seed = await seedLockedBooking(result, { slotStartsAt });
+    const transaction = buildFakeTransactionXdr();
+    let submitCalled = false;
+    const adapter: EscrowAdapter = {
+      ...unreachableEscrowAdapter(),
+      startDispute: async () => ({ unsignedXdr: "x", txHash: transaction.hash }),
+      submit: async () => {
+        submitCalled = true;
+        return { txHash: "late-dispute-submit" };
+      },
+    };
+
+    await openDispute(result.db, seed.bookingId, seed.clientWalletAddress, "disagreement", adapter, now);
+    await assert.rejects(
+      () => submitSignedTransaction(result.db, seed.bookingId, transaction.xdr, "client", adapter, slotStartsAt + 8 * 24 * 3600),
+      DisputeWindowClosedError,
+    );
+    assert.equal(submitCalled, false);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
 test("openDispute: suggested outcome follows the cancellation policy (who cancels decides)", async () => {
   const result = openTestDatabase();
   try {
@@ -794,7 +945,11 @@ async function seedLockedWithNoLifecycleEvidence(
   const clientWalletAddress = Keypair.random().publicKey();
   const providerWalletAddress = Keypair.random().publicKey();
   const providerProfileId = await seedProviderProfile(result, { walletAddress: providerWalletAddress });
-  const bookingId = await seedBooking(result, { providerProfileId, clientWalletAddress });
+  const bookingId = await seedBooking(result, {
+    providerProfileId,
+    clientWalletAddress,
+    slotStartsAt: Math.floor(Date.now() / 1000) - 3600,
+  });
   const contractId = fakeContractId();
   await updateEscrowContractId(result.db, bookingId, contractId);
   updateEscrowStateSync(result.db, bookingId, "locked");

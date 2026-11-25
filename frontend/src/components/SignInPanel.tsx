@@ -10,6 +10,9 @@ export interface SignInPanelProps {
    * for a page that has already said it in its own words (e.g. the "List
    * your shop" steps). */
   intro?: ReactNode;
+  /** Called when the user is rate-limited after too many failed prompts.
+   * The waitMs is milliseconds the user must wait before trying again. */
+  onRateLimited?: (waitMs: number) => void;
 }
 
 /**
@@ -24,7 +27,11 @@ export interface SignInPanelProps {
  * rejection shows the backend's own message; anything else is a
  * connection drop.
  */
-export function SignInPanel({ onSignedIn, intro }: SignInPanelProps) {
+export function SignInPanel({
+  onSignedIn,
+  intro,
+  onRateLimited,
+}: SignInPanelProps) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -32,7 +39,17 @@ export function SignInPanel({ onSignedIn, intro }: SignInPanelProps) {
     setPending(true);
     setError(undefined);
     try {
-      onSignedIn(await signIn());
+      const result = await signIn();
+      // signIn() may return either a Session or { overLimit: true; waitMs }
+      if ((result as { overLimit?: boolean }).overLimit) {
+        const waitMs = (result as { overLimit: true; waitMs: number }).waitMs;
+        if (onRateLimited) {
+          onRateLimited(waitMs);
+        }
+        setError(`Too many failed sign-in attempts. Please wait ${Math.ceil(waitMs / 1000)} second${Math.ceil(waitMs / 1000) !== 1 ? "s" : ""} before trying again.`);
+      } else if (onSignedIn) {
+        onSignedIn(result as Session);
+      }
     } catch (caught) {
       console.error("[sign-in]", caught);
       setError(signInErrorMessage(caught));

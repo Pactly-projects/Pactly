@@ -131,6 +131,7 @@ export function ApplyPage() {
         </ol>
         <SignInPanel
           onSignedIn={setSession}
+          onRateLimited={(waitMs) => setError(`Too many failed sign-in attempts. Please wait ${Math.ceil(waitMs / 1000)} second${Math.ceil(waitMs / 1000) !== 1 ? "s" : ""} before trying again.`}
           intro="Sign in with your passkey — no email, no password, no wallet app. First time here? The same tap creates your account."
         />
       </div>

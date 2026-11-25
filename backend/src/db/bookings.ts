@@ -1009,9 +1009,15 @@ export interface AnchorDepositSnapshot {
   updatedAt: number;
 }
 
-/** Story 2.4: persists the SEP-6 deposit snapshot on the booking. */
-export async function setAnchorDeposit(db: Db, bookingId: string, snapshot: AnchorDepositSnapshot): Promise<void> {
-  await db
+/** Story 2.4: persists the SEP-6 deposit snapshot on the booking.
+ *
+ * The stored `anchorDepositId` is the only link between the booking and the
+ * anchor's own records, so a deposit that already completed is never
+ * replaced by a different id (a later retry attempt cannot orphan the
+ * transfer that actually funded the booking). Refreshing the same id is
+ * always allowed. Returns `false` when the write was refused. */
+export async function setAnchorDeposit(db: Db, bookingId: string, snapshot: AnchorDepositSnapshot): Promise<boolean> {
+  const result = await db
     .update(bookings)
     .set({
       anchorDepositId: snapshot.id,
@@ -1022,7 +1028,18 @@ export async function setAnchorDeposit(db: Db, bookingId: string, snapshot: Anch
       anchorDepositAmountIn: snapshot.amountIn ?? null,
       anchorDepositUpdatedAt: snapshot.updatedAt,
     })
-    .where(eq(bookings.id, bookingId));
+    .where(
+      and(
+        eq(bookings.id, bookingId),
+        or(
+          isNull(bookings.anchorDepositId),
+          eq(bookings.anchorDepositId, snapshot.id),
+          isNull(bookings.anchorDepositStatus),
+          ne(bookings.anchorDepositStatus, "completed"),
+        ),
+      ),
+    );
+  return result.changes > 0;
 }
 
 /** Story 2.4: extend the hold while a local-currency transfer is still
@@ -1073,10 +1090,10 @@ export async function markProviderReminderShown(db: Db, bookingId: string, shown
   await db.update(bookings).set({ providerReminderShownAt: shownAt }).where(eq(bookings.id, bookingId));
 }
 
-/** Issue #2 (verified sessions): marks a booking's own once-only counted
- * stamp and bumps the shop's counter in the same transaction. Returns
- * `false` when that booking was already counted -- the counter never moves
- * twice for one booking. */
+/** Increments `provider_profiles.verified_session_count` for `bookingId` at
+ * most once, and returns whether it did. The `WHERE ... IS NULL` on the
+ * marker is what enforces "the same booking cannot increase the count
+ * twice" independently of any dedupe ledger. */
 export function recordVerifiedSessionCountedSync(
   db: DbOrTx,
   bookingId: string,
@@ -1098,8 +1115,26 @@ export function recordVerifiedSessionCountedSync(
   return true;
 }
 
-/** Issue #2 (provider cancellations): the same once-only stamp for a
- * dispute whose reason is `provider-cancel`. */
+/**
+ * Marks a booking as arrived -- the provider's record that the client showed
+ * up. Succeeds (returns `true`) only once: the first call for a booking with
+ * no `arrivedAt` yet set. A second call returns `false` (keeps the first
+ * timestamp), and a call for a nonexistent booking also returns `false`.
+ */
+export async function markBookingArrived(db: Db, bookingId: string, arrivedAt: number): Promise<boolean> {
+  const result = await db
+    .update(bookings)
+    .set({ arrivedAt })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.arrivedAt)));
+  return result.changes > 0;
+}
+
+/** The provider-cancellation sibling of
+ * {@link recordVerifiedSessionCountedSync}: increments
+ * `provider_profiles.provider_cancellation_count` at most once per booking.
+ * Only a dispute whose reason is `provider-cancel` ever calls this; a client
+ * cancelling, a no-show, a plain disagreement, a refund or a release never
+ * does. */
 export function recordProviderCancellationCountedSync(
   db: DbOrTx,
   bookingId: string,
@@ -1119,13 +1154,4 @@ export function recordProviderCancellationCountedSync(
     .where(eq(providerProfiles.id, providerProfileId))
     .run();
   return true;
-}
-
-/** The shop marks when a client walks in. Once set, never cleared. */
-export async function markBookingArrived(db: Db, bookingId: string, arrivedAt: number): Promise<boolean> {
-  const result = await db
-    .update(bookings)
-    .set({ arrivedAt })
-    .where(and(eq(bookings.id, bookingId), isNull(bookings.arrivedAt)));
-  return result.changes > 0;
 }

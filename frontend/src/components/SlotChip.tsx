@@ -14,25 +14,39 @@ export interface SlotChipProps {
   /** Issue #64: the shop's IANA zone. When supplied, the chip names the
    * shop's weekday, time and timezone instead of the viewer's local time. */
   timeZone?: string;
+  /** Issue #141: reason why this slot cannot be booked, or null/undefined if bookable. */
+  reason?: string | null;
+  unbookableReason?: string | null;
 }
 
 /** DESIGN.md's `chip-slot`, keyboard-reachable (a real `<button>`, not a
  * `<div>` with a click handler), at least 44px per the Accessibility
  * Floor. This story only ever renders open slots -- nothing here is
  * "taken" yet (no booking exists that could hold one). */
-export function SlotChip({ startsAt, selected, onSelect, showDay, timeZone }: SlotChipProps) {
+export function SlotChip({ startsAt, selected, onSelect, showDay, timeZone, reason, unbookableReason }: SlotChipProps) {
+  const activeReason = reason ?? unbookableReason ?? null;
+  const isDisabled = Boolean(activeReason);
+
+  const formattedTime = timeZone
+    ? formatSlotWithZone(startsAt, timeZone)
+    : showDay
+      ? `${formatSlotDayShort(startsAt)} ${formatSlotTime(startsAt)}`
+      : formatSlotTime(startsAt);
+
   return (
     <button
       type="button"
-      className={`slot-chip tabular-nums${selected ? " slot-chip--selected" : ""}`}
+      className={`slot-chip tabular-nums${selected ? " slot-chip--selected" : ""}${isDisabled ? " slot-chip--unbookable" : ""}`}
       aria-pressed={selected ?? false}
-      onClick={() => onSelect?.(startsAt)}
+      aria-disabled={isDisabled}
+      disabled={isDisabled}
+      onClick={() => {
+        if (!isDisabled) {
+          onSelect?.(startsAt);
+        }
+      }}
     >
-      {timeZone
-        ? formatSlotWithZone(startsAt, timeZone)
-        : showDay
-          ? `${formatSlotDayShort(startsAt)} ${formatSlotTime(startsAt)}`
-          : formatSlotTime(startsAt)}
+      {activeReason ? `${formattedTime} (${activeReason})` : formattedTime}
     </button>
   );
 }

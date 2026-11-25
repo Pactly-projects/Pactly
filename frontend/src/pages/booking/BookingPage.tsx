@@ -140,7 +140,11 @@ export function BookingPage() {
   // 2026-09 pivot: the anchor bank transfer is the only way to pay the
   // deposit -- there is no payment-method choice any more, so the local
   // transfer state below is always the live path once a hold exists.
+  // Issue #145: intake answers for this booking
+  const [intakeAnswers, setIntakeAnswers] = useState<Record<string, string>>({});
+  const [intakeLoading, setIntakeLoading] = useState(false);
   const [localDeposit, setLocalDeposit] = useState<LocalDepositView | undefined>();
+  const [clientEmail, setClientEmail] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
   const [localNotice, setLocalNotice] = useState<string | undefined>();
   const [lockWalletConfirm, setLockWalletConfirm] = useState<
@@ -1080,6 +1084,20 @@ export function BookingPage() {
               <span>Free cancellation until</span>
               <strong>{freeCancellationEnded ? "already passed" : formatDeadline(cancelDeadline)}</strong>
             </div>
+            {hold && !isLocked && (
+              <div className="booking-summary__row">
+                <span>Dispute note</span>
+                <textarea
+                  className="textarea"
+                  placeholder="Add a note about this dispute (max 500 chars, spaces trimmed)"
+                  value={disputeNote}
+                  onChange={(e) => setDisputeNote(e.target.value)}
+                  maxLength={500}
+                  disabled={lockInFlight}
+                />
+                <span className="char-counter">{disputeNoteLength}/500</span>
+              </div>
+            )}
           </div>
 
           <div className="booking-summary-note">
@@ -1143,11 +1161,46 @@ export function BookingPage() {
                   onChange={(event) => setClientEmail(event.target.value)}
                 />
               </div>
+              <div className="field" style={{ marginTop: "var(--space-4)" }}>
+                <label htmlFor="booking-client-email">Client email (optional)</label>
+                <input
+                  id="booking-client-email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  value={clientEmail}
+                  onChange={(event) => setClientEmail(event.target.value)}
+                />
+              </div>
+              <div className="field" style={{ marginTop: "var(--space-4)" }}>
+                <label htmlFor="booking-intake-questions">Intake questions</label>
+                {profile.intakeQuestions && profile.intakeQuestions.length > 0 ? (
+                  <div>
+                    {profile.intakeQuestions.map((question, i) => (
+                      <div key={question.id} style={{ marginBottom: "var(--space-2)", display: "flex", alignItems: "center" }}>
+                        <span style={{ width: "120px" }}>{question.text}</span>
+                        <input
+                          type="text"
+                          value={intakeAnswers[question.id] || ""}
+                          onChange={(event) => setIntakeAnswers({...intakeAnswers, [question.id]: event.target.value})}
+                          disabled={question.isRequired}
+                          style={{ marginLeft: "var(--space-2)", flex: 1 }}
+                        />
+                        {question.isRequired && !intakeAnswers[question.id] && (
+                          <span style={{ color: "var(--error)", fontSize: "var(--text-12)" }}>* Required</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p>No intake questions for this provider.</p>
+                )}
+              </div>
               <button type="button" className="button-primary" onClick={ensureSessionAndHold} disabled={connecting || holdMutation.isPending} aria-label={session ? "Hold this slot" : "Sign in and hold this slot"}>
                 {connecting ? "Signing you in…" : holdMutation.isPending ? "Holding your slot…" : session ? "Hold this slot" : "Sign in and hold this slot"}
               </button>
             </div>
-          )}
+            )}
 
           {hold && !isLocked && (
             <div className="booking-pay">
@@ -1212,6 +1265,13 @@ export function BookingPage() {
             </div>
           )}
         </section>
+
+        {booking.data?.anchorTransactionId && (
+          <p className="escrow-lane__notice" style={{ overflowWrap: "anywhere" }}>
+            Bank transfer reference:{" "}
+            <span className="tabular-nums" style={{ userSelect: "all" }}>{booking.data.anchorTransactionId}</span>
+          </p>
+        )}
 
         <EscrowLane
           depositAmount={depositAmount}
@@ -1382,3 +1442,51 @@ function escrowStateLabel(phase: DisplayPhase): string {
 function escrowStateDetail(phase: DisplayPhase): string | undefined {
   return phase === "deployed" ? "Your deposit is not in it yet." : undefined;
 }
+
+/** Issue #133: set the browser title to include the shop name and booking status */
+useEffect(() => {
+  const shopName = hold?.provider.displayName ?? profile.displayName ?? "Pactly";
+  let statusWord = "";
+  switch (phase) {
+    case "idle":
+      statusWord = "Hold the slot";
+      break;
+    case "building-deploy":
+      statusWord = "Building deploy";
+      break;
+    case "confirming-escrow":
+      statusWord = "Awaiting confirmation";
+      break;
+    case "awaiting-deploy-signature":
+      statusWord = "Create your escrow";
+      break;
+    case "submitting-deploy":
+      statusWord = "Deploying";
+      break;
+    case "deploy-failed":
+      statusWord = "Deploy failed";
+      break;
+    case "deployed":
+      statusWord = "Deployed";
+      break;
+    case "building-fund":
+      statusWord = "Building fund";
+      break;
+    case "awaiting-fund-signature":
+      statusWord = "Lock your deposit";
+      break;
+    case "submitting-fund":
+      statusWord = "Funding";
+      break;
+    case "reconciling":
+      statusWord = "Reconciling";
+      break;
+    default:
+      statusWord = "Pactly";
+  }
+  if (hold) {
+    document.title = `${shopName} - ${statusWord}`;
+  } else {
+    document.title = "Pactly";
+  }
+}, [hold, phase, shopName]);

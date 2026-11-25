@@ -41,6 +41,7 @@ import {
 } from "../db/users.js";
 import { issuePactlyJwt } from "./challenge.js";
 import { PasskeyChallengeExpiredError, PasskeyInvalidError, PasskeyUnknownError } from "./errors.js";
+import { db } from "../db/client.js";
 
 const RP_NAME = "Pactly";
 /** How long a ceremony's challenge stays valid between `/options` and
@@ -48,6 +49,36 @@ const RP_NAME = "Pactly";
  * enough that a leaked challenge is useless soon after. */
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const MAX_DISPLAY_NAME_LENGTH = 80;
+/** Maximum failed passkey attempts before rate limiting kicks in. */
+const MAX_FAILED_ATTEMPTS = 3;
+/** Wait time multiplier: after MAX_FAILED_ATTEMPTS failures, the user must
+ * wait WAIT_MULTIPLIER * (failedAttempts - MAX_FAILED_ATTEMPTS + 1) seconds. */
+const WAIT_MULTIPLIER_SECONDS = 30;
+
+/** Check if the user has exceeded the failed passkey attempt limit.
+ * Returns the wait time in milliseconds the user must wait, or `null` if
+ * under the limit. The wait is computed server-side based on how far past
+ * the limit the user is and the WAIT_MULTIPLIER_SECONDS constant. */
+function checkPasskeyFailureLimit(
+  failedAttempts: number,
+  failuresResetAt: number | undefined,
+): { overLimit: boolean; waitMs: number | null } {
+  if (failedAttempts <= MAX_FAILED_ATTEMPTS) {
+    return { overLimit: false, waitMs: null };
+  }
+  // Compute wait time: multiplier * (current failures - limit + 1)
+  const excess = failedAttempts - MAX_FAILED_ATTEMPTS + 1;
+  const waitSeconds = WAIT_MULTIPLIER_SECONDS * excess;
+  const waitMs = waitSeconds * 1000;
+  // Also factor in how long ago the counter was reset: if reset recently,
+  // the wait is effectively the full amount; if reset long ago, we still
+  // return the full wait but could optionally reduce it.
+  const now = Date.now();
+  const timeSinceReset = now - (failuresResetAt ?? now);
+  // If the counter was reset very recently (within the wait window),
+  // we still return the full wait for simplicity.
+  return { overLimit: true, waitMs };
+}
 
 export interface PasskeyDeps {
   /** Epoch milliseconds -- defaults to `Date.now()`. A test's seam for
@@ -205,7 +236,7 @@ export async function finishPasskeyLogin(
   db: Db,
   input: { loginId: string; response: unknown },
   deps: PasskeyDeps = {},
-): Promise<PasskeySession> {
+): Promise<PasskeySession | { overLimit: true; waitMs: number }> {
   const response = input.response as AuthenticationResponseJSON | undefined;
   const credentialId = typeof response?.id === "string" ? response.id : undefined;
   if (!credentialId) {
@@ -258,5 +289,67 @@ export async function finishPasskeyLogin(
     throw new PasskeyUnknownError();
   }
   await updatePasskeyCounter(db, credential.id, verification.authenticationInfo.newCounter);
+
+  // Issue #134: track failed passkey attempts; clear on success
+  if (credential.userId) {
+    await db.update(passkeyCredentials)
+      .set({ failedAttempts: 0, failuresResetAt: Number(new Date()) })
+      .where(eq(passkeyCredentials.id, credential.id));
+  }
+
   return { token: await issuePactlyJwt(user.walletAddress), walletAddress: user.walletAddress };
+}
+
+/** Attempt to finish passkey login, with rate limiting on failures.
+ * Returns the session on success, or { overLimit: true; waitMs } if the
+ * user has exceeded MAX_FAILED_ATTEMPTS. The caller should refuse the
+ * prompt and show the wait time to the user. */
+export async function finishPasskeyLoginWithLimit(
+  db: Db,
+  input: { loginId: string; response: unknown },
+  deps: PasskeyDeps = {},
+): Promise<PasskeySession | { overLimit: true; waitMs: number }> {
+  // Get the credential first to check failure state
+  const response = input.response as AuthenticationResponseJSON | undefined;
+  const credentialId = typeof response?.id === "string" ? response.id : undefined;
+  if (!credentialId) {
+    return { overLimit: true, waitMs: 0 };
+  }
+  const credential = await getPasskeyCredentialById(db, credentialId);
+  if (!credential) {
+    return { overLimit: true, waitMs: 0 };
+  }
+
+  // Check failure limit before attempting verification
+  const failureCheck = checkPasskeyFailureLimit(
+    credential.failedAttempts,
+    credential.failuresResetAt,
+  );
+  if (failureCheck.overLimit) {
+    return { overLimit: true, waitMs: failureCheck.waitMs };
+  }
+
+  let verification;
+  try {
+    verification = await finishPasskeyLogin(db, input, deps);
+  } catch (error) {
+    if (error instanceof PasskeyInvalidError) {
+      // Issue #134: increment failure counter on sign-in failure
+      await db.update(passkeyCredentials)
+        .set({ failedAttempts: credential.failedAttempts + 1, failuresResetAt: Number(new Date()) })
+        .where(eq(passkeyCredentials.id, credential.id));
+      // Check if we just exceeded the limit
+      const newFailureCheck = checkPasskeyFailureLimit(
+        credential.failedAttempts + 1,
+        Number(new Date()),
+      );
+      if (newFailureCheck.overLimit) {
+        return { overLimit: true, waitMs: newFailureCheck.waitMs };
+      }
+    }
+    throw error;
+  }
+
+  // On success, the reset happened inside finishPasskeyLogin already
+  return verification;
 }

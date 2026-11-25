@@ -59,7 +59,10 @@ export function DiscoverPage() {
     return categories.some((category) => category.slug === requestedSlug) ? requestedSlug : undefined;
   }, [requestedSlug, categoriesReady, categories]);
 
-  const q = searchParams.get("q") ?? "";
+  const qRaw = searchParams.get("q") ?? "";
+  // Issue #155: a query of only spaces is treated as empty, so an all-space
+  // URL never filters, never echoes whitespace, and the field reads empty.
+  const q = qRaw.trim() ? qRaw : "";
   const formats = searchParams.getAll("format");
   const minPriceRaw = searchParams.get("minPrice");
   const minPrice = minPriceRaw !== null && NON_NEGATIVE_INTEGER_STRING.test(minPriceRaw) ? minPriceRaw : undefined;
@@ -76,6 +79,7 @@ export function DiscoverPage() {
       : undefined;
   const whenRaw = searchParams.get("when");
   const availability = whenRaw && AVAILABILITY_VALUES.has(whenRaw as DiscoverAvailability) ? (whenRaw as DiscoverAvailability) : undefined;
+  const sort = searchParams.get("sort") ?? undefined;
 
   function updateParams(mutate: (params: URLSearchParams) => void): void {
     const next = new URLSearchParams(searchParams);
@@ -149,6 +153,16 @@ export function DiscoverPage() {
     });
   }
 
+  function setSort(value: string | undefined): void {
+    updateParams((params) => {
+      if (value) {
+        params.set("sort", value);
+      } else {
+        params.delete("sort");
+      }
+    });
+  }
+
   function clearFilter(key: string): void {
     updateParams((params) => {
       if (key === "format") params.delete("format");
@@ -184,6 +198,7 @@ export function DiscoverPage() {
       maxPrice,
       maxDepositBps,
       when: availability,
+      sort,
     },
     { enabled: !waitingForCategoryResolution },
   );
@@ -230,6 +245,8 @@ export function DiscoverPage() {
     onMaxDepositBpsChange: setMaxDepositBps,
     availability,
     onAvailabilityChange: setAvailability,
+    sort,
+    onSortChange: setSort,
   };
 
   const resultsQualifier = q.trim() ? q.trim() : selectedCategoryName;

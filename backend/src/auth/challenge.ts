@@ -203,9 +203,20 @@ export interface VerifiedPactlyJwt {
   walletAddress: string;
 }
 
+/** Check if a JWT error is specifically an expiry error */
+function isJwtExpiredError(error: Error): boolean {
+  return (
+    error.name === "JWTExpired" ||
+    error.code === "ERR_JWT_EXPIRED" ||
+    /expired/i.test(error.message)
+  );
+}
+
 /** Verifies a Pactly JWT and returns the wallet address it names. Missing,
  * expired and tampered tokens all fail through the same
- * {@link PactlyJwtError} shape -- see that class's own comment for why. */
+ * {@link PactlyJwtError} shape -- see that class's own comment for why.
+ * Expired tokens include a {@link cause} property with the original
+ * {@link jose | jose.JWTExpired} error for diagnostic purposes. */
 export async function verifyPactlyJwt(token: string, options: PactlyJwtOptions = {}): Promise<VerifiedPactlyJwt> {
   if (!token) {
     throw new PactlyJwtError();
@@ -217,7 +228,15 @@ export async function verifyPactlyJwt(token: string, options: PactlyJwtOptions =
       throw new PactlyJwtError();
     }
     return { walletAddress: payload.sub };
-  } catch {
-    throw new PactlyJwtError();
+  } catch (error) {
+    const jwtError = error as Error;
+    if (isJwtExpiredError(jwtError)) {
+      // Include the original jose JWTExpired error as cause for frontend detection
+      const expiryError = new PactlyJwtError("The session token is expired.");
+      ;(expiryError as any).cause = jwtError;
+      throw expiryError;
+    }
+    // Other JWT failures (missing, tampered, etc.) - generic message
+    throw new PactlyJwtError("The session token is missing, expired, or invalid.");
   }
 }

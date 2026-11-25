@@ -20,3 +20,15 @@
   same trap applies to the client's trustline — and `cancel_by_professional`, the professional's only
   way to call a booking off, becomes uncallable if the client cannot receive. The client already needs
   the trustline to lock the deposit in the first place, so the gate belongs at booking creation.
+- source_spec: none
+  summary: #72 — Rezervasyon kilitlendiğinde iptal penceresini, depozitoyu ve kısa koşul metnini rezervasyonda dondur.
+  evidence: #53 ile birlikte istenen bağımsız, ayrı yayımlanabilir bir hedef olduğu için bu kapsamdan ayrıldı.
+- source_spec: none
+  summary: #66 — Mağazaların rezervasyonda en fazla beş özel intake sorusu sormasını ve yanıtları rezervasyona kaydetmesini sağla.
+  evidence: #53 ile birlikte istenen bağımsız, ayrı yayımlanabilir bir hedef olduğu için bu kapsamdan ayrıldı.
+- source_spec: none
+  summary: #74 — Mağaza profiline mahalle adı ekle ve keşfi tam, büyük/küçük harfe duyarsız mahalle filtresiyle genişlet.
+  evidence: #53 ile birlikte istenen bağımsız, ayrı yayımlanabilir bir hedef olduğu için bu kapsamdan ayrıldı.
+- source_spec: `_bmad-output/implementation-artifacts/spec-gh-53-close-disputes-after-appointment-deadline.md`
+  summary: Düzeltmeden önceki ana dalda bulunan TypeScript/TSX sözdizimi hatalarını gidererek test ve tür denetimi komutlarını yeniden çalıştır.
+  evidence: `npm test` app.ts ve schema.ts dosyalarındaki mevcut parse hataları nedeniyle backend testlerine ulaşamıyor; frontend typecheck de mevcut hooks.ts ve ProviderProfilePage.tsx parse hatalarında duruyor. Bu dosyalar #53 değişikliğinin parçası değil.

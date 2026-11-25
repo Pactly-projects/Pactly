@@ -12,6 +12,7 @@
  * `test/app-providers.test.ts` covers the same matrix again at the HTTP
  * boundary (status codes, envelope shape).
  */
+import "./testConfigEnv.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 

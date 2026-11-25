@@ -30,6 +30,11 @@ const AVAILABILITY_OPTIONS: Array<{ value: DiscoverAvailability | undefined; lab
   { value: "week", label: "This week" },
 ];
 
+const SORT_OPTIONS: Array<{ value: string | undefined; label: string }> = [
+  { value: undefined, label: "Default" },
+  { value: "soonest", label: "Soonest open slot" },
+];
+
 export interface FilterFieldsProps {
   formats: string[];
   onToggleFormat: (format: string) => void;
@@ -40,6 +45,9 @@ export interface FilterFieldsProps {
   onMaxDepositBpsChange: (bps: number | undefined) => void;
   availability: DiscoverAvailability | undefined;
   onAvailabilityChange: (value: DiscoverAvailability | undefined) => void;
+  /** Issue #138: sort order */
+  sort?: string;
+  onSortChange?: (sort: string | undefined) => void;
 }
 
 /** The min/max price inputs, typed in TRY and converted to the URL's own
@@ -156,9 +164,30 @@ export function FilterFields({
   onMaxDepositBpsChange,
   availability,
   onAvailabilityChange,
+  sort,
+  onSortChange,
 }: FilterFieldsProps) {
   return (
     <div className="filter-fields">
+      <div className="filter-field">
+        <h3 className="filter-field__heading">Sort by</h3>
+        <div className="filter-field__radio-group" role="radiogroup" aria-label="Sort by">
+          {SORT_OPTIONS.map((option) => (
+            <button
+              key={option.label}
+              type="button"
+              role="radio"
+              aria-checked={(sort === undefined && option.value === undefined) || sort === option.value}
+              className={`filter-field__radio${((sort === undefined && option.value === undefined) || sort === option.value) ? " filter-field__radio--selected" : ""}`}
+              onClick={() => onSortChange?.(option.value)}
+            >
+              <span className="filter-field__radio-box" aria-hidden="true" />
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="filter-field">
         <h3 className="filter-field__heading">When</h3>
         <div className="filter-field__radio-group" role="radiogroup" aria-label="When">

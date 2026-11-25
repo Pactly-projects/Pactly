@@ -10,6 +10,7 @@ import { TryAmount } from "../../components/TryAmount";
 import { formatSessionFormat } from "../../lib/sessionFormat";
 import { shortenStellarId } from "../../lib/stellar";
 import { SignInPanel } from "../../components/SignInPanel";
+import { useRateLimit } from "../../hooks/useRateLimit";
 import { getSession, signOut, type Session } from "../../wallet";
 
 function ApplicationRow({
@@ -141,7 +142,7 @@ export function ApplicationsPage() {
     setSessionExpired(true);
   }
 
-  const unauthorized = applicationsQuery.error instanceof ApiError && applicationsQuery.error.status === 401;
+  const unauthorized = applicationsQuery.error instanceof ApiError && (applicationsQuery.error.status === 401 || applicationsQuery.error.code === "session_expired");
   useEffect(() => {
     if (unauthorized) {
       handleUnauthorized();
@@ -177,7 +178,7 @@ export function ApplicationsPage() {
             <p>Your session ended. Sign in again to continue.</p>
           </div>
         )}
-        <SignInPanel onSignedIn={handleSignedIn} />
+        <SignInPanel onSignedIn={handleSignedIn} onRateLimited={(waitMs) => setError(`Too many failed sign-in attempts. Please wait ${Math.ceil(waitMs / 1000)} second${Math.ceil(waitMs / 1000) !== 1 ? "s" : ""} before trying again.`)} />
       </div>
     );
   }
