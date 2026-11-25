@@ -33,8 +33,20 @@ import {
 } from "../db/availabilitySlots.js";
 import { getCategoryById, getCategoryBySlug, listCategories, listVisibleCategories, type CategoryRow } from "../db/categories.js";
 import type { Db } from "../db/client.js";
-import { listEarliestOfferedSlotsByProvider, listOfferedSlots } from "./availability.js";
+import {
+  assertBreaksWithinRanges,
+  filterSlotsOutsideBreaks,
+  listEarliestOfferedSlotsByProvider,
+  listOfferedSlots,
+  validateBreaks,
+  workingRangesForSlots,
+  type ProviderBreak,
+} from "./availability.js";
 import { isWithinBookingWindow } from "./bookingWindow.js";
+import { type PublicDayHours, buildPublicHours } from "./publicHours.js";
+import { isValidTimeZone } from "./timezone.js";
+import { listProviderBreaks, replaceProviderBreaks } from "../db/providerBreaks.js";
+import { setProviderProfileSuspension } from "../db/providerProfiles.js";
 
 /** Pactly's only supported asset for now (matches `services/booking.ts`'s
  * own `DEPOSIT_ASSET_SYMBOL`). Every amount this module returns is shaped
@@ -387,8 +399,6 @@ export interface ProviderProfileView {
 export function buildProviderProfileView(
   profile: ProviderProfileRow,
   category: CategoryRow,
-  slots: AvailabilitySlotRow[],
-  reviews: ReviewView[] = [],
   slots: Array<Pick<AvailabilitySlotRow, "startsAt"> | number>,
 ): ProviderProfileView {
   let languages: string[] = [];
@@ -978,6 +988,11 @@ export async function listDiscoverProviders(
     );
   }
 
+  const weeklyPatternSlotsByProvider = await listWeeklyPatternSlotsByProvider(
+    db,
+    profiles.map((profile) => profile.id),
+    now,
+  );
   const cards = profiles.map((profile) => {
     const category = categoryById.get(profile.categoryId);
     if (!category) {

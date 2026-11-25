@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { joinWaitlist, submitShopReport, usePublicProviderProfile } from "../../api/hooks";
+import { joinWaitlist, saveShop, submitShopReport, unsaveShop, useIsShopSaved, usePublicProviderProfile } from "../../api/hooks";
 import { ApiError } from "../../api/client";
 import { DepositPill } from "../../components/DepositPill";
 import { ProviderHeader } from "../../components/ProviderHeader";
@@ -22,6 +22,10 @@ export function ProviderProfilePage() {
   const { data: profile, isLoading, error } = usePublicProviderProfile(id);
   
   const [session] = useState<Session | undefined>(() => getSession());
+  const { data: savedData, refetch: refetchSaved } = useIsShopSaved(id, session);
+  const [savingState, setSavingState] = useState<"idle" | "saving" | "unsaving">("idle");
+  const [saveNotice, setSaveNotice] = useState<string | undefined>();
+  const isSaved = savedData?.isSaved ?? false;
   const [showReportDialog, setShowReportDialog] = useState(false);
   const [reportReason, setReportReason] = useState("");
   const [reportSubmitting, setReportSubmitting] = useState(false);
@@ -80,6 +84,9 @@ export function ProviderProfilePage() {
       }
     } finally {
       setSavingState("idle");
+    }
+  }
+
   async function handleReportSubmit(): Promise<void> {
     if (!session || !id) return;
     
@@ -214,6 +221,9 @@ const dayGroups = groupSlotsByDay(profile.slots);
             {savingState === "idle" && (isSaved ? "★ Saved" : "☆ Save shop")}
           </button>
           {saveNotice && <span style={{ fontSize: "var(--text-14)", color: "var(--color-text-secondary)" }}>{saveNotice}</span>}
+        </div>
+      )}
+
       {canReport && (
         <div style={{ marginTop: "var(--space-4)" }}>
           <button

@@ -236,6 +236,22 @@ const STATEMENTS: readonly string[] = [
     display_name TEXT,
     expires_at INTEGER NOT NULL
   )`,
+  // Issue #7: every contract id a deploy returned for a booking, including a
+  // replaced one (see `schema.ts`'s own table comment).
+  `CREATE TABLE IF NOT EXISTS escrow_contract_deployments (
+    booking_id TEXT NOT NULL,
+    contract_id TEXT NOT NULL,
+    deployed_at INTEGER NOT NULL,
+    PRIMARY KEY (booking_id, contract_id)
+  )`,
+  // Issue #31: one row per party per booking-level event.
+  `CREATE TABLE IF NOT EXISTS escrow_events (
+    id TEXT PRIMARY KEY,
+    booking_id TEXT NOT NULL REFERENCES bookings(id),
+    wallet_address TEXT NOT NULL,
+    type TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS shop_reports (
     id TEXT PRIMARY KEY,
     provider_profile_id TEXT NOT NULL REFERENCES provider_profiles(id),
@@ -458,6 +474,7 @@ export function runMigrations(sqlite: Database): void {
   // Mark client arrived: the shop marks when a client walks in.
   if (!hasColumn(sqlite, "bookings", "arrived_at")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN arrived_at INTEGER`);
+  }
   // Optional client email for the shop's post-release mailto draft (#47).
   if (!hasColumn(sqlite, "bookings", "client_email")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN client_email TEXT`);
@@ -476,6 +493,37 @@ export function runMigrations(sqlite: Database): void {
   // Story 5.8: admin can hide categories from discovery and new applications.
   if (!hasColumn(sqlite, "categories", "visible")) {
     sqlite.exec(`ALTER TABLE categories ADD COLUMN visible INTEGER NOT NULL DEFAULT 1`);
+  }
+  // Issues #146-#148: the shop's intake questions and each booking's own
+  // copy of them with the client's answers.
+  if (!hasColumn(sqlite, "provider_profiles", "intake_questions")) {
+    sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN intake_questions TEXT NOT NULL DEFAULT '[]'`);
+  }
+  if (!hasColumn(sqlite, "bookings", "intake_answers")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN intake_answers TEXT NOT NULL DEFAULT '[]'`);
+  }
+  // Issue #149: a recorded in-person balance and its one correction.
+  if (!hasColumn(sqlite, "bookings", "in_person_balance_amount")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN in_person_balance_amount TEXT`);
+  }
+  if (!hasColumn(sqlite, "bookings", "in_person_balance_previous_amount")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN in_person_balance_previous_amount TEXT`);
+  }
+  if (!hasColumn(sqlite, "bookings", "in_person_balance_corrected_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN in_person_balance_corrected_at INTEGER`);
+  }
+  // Story 3.8: the client's private note on a booking.
+  if (!hasColumn(sqlite, "bookings", "note")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN note TEXT`);
+  }
+  // Issue #2: once-only markers for the two trust counters. A database
+  // created before this story has existing bookings, so both are nullable
+  // and stay null until their own event is first observed.
+  if (!hasColumn(sqlite, "bookings", "verified_session_counted_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN verified_session_counted_at INTEGER`);
+  }
+  if (!hasColumn(sqlite, "bookings", "provider_cancellation_counted_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN provider_cancellation_counted_at INTEGER`);
   }
   // Appointment buffer: minutes kept free after a locked booking before
   // another slot is offered. Default 0 keeps adjacent slots (existing rows).

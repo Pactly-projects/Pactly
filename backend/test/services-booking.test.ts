@@ -33,6 +33,8 @@ import type {
   UnsignedTransaction,
 } from "../src/escrow/interface.js";
 import { closeDatabase, openTestDatabase, randomBookingId, seedBooking, seedProviderProfile, USDC_READY_WALLET_DEPS } from "./helpers.js";
+import { listContractDeployments } from "../src/db/escrowContractDeployments.js";
+import { setEscrowFundTxHash } from "../src/db/bookings.js";
 
 function fakeContractId(): string {
   return StrKey.encodeContract(randomBytes(32));

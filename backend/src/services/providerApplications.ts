@@ -35,6 +35,7 @@ import {
 import type { ProviderApplicationState } from "../db/schema.js";
 import { requireUsdcTrustline, type UsdcTrustlineDeps } from "../anchor/trustline.js";
 import { computeDepositAmount, validateProviderRules } from "./profile.js";
+import { setProviderProfileApproved } from "../db/providerProfiles.js";
 
 const ASSET = "USDC";
 

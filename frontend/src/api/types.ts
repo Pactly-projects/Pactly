@@ -163,8 +163,22 @@ export interface BookingProviderSummary {
   title: string;
 }
 
+/** Issues #146-#148: one intake question as asked on one booking, with the
+ * client's answer. An unanswered question is kept with `answer: ""` --
+ * never dropped -- so the question itself is always shown. Visible only to
+ * the booking's client, its shop and an admin resolving a dispute; never
+ * on the public proof page or in discovery. */
+export interface IntakeAnswer {
+  questionId: string;
+  label: string;
+  required: boolean;
+  answer: string;
+}
+
 export interface HoldSlotResponse {
   bookingId: string;
+  /** The questions this booking asks, with the client's answers so far. */
+  intakeAnswers: IntakeAnswer[];
   /** UTC epoch seconds. */
   holdExpiresAt: number;
   deposit: Money;
@@ -242,6 +256,8 @@ export interface BookingView {
    * through Pactly (`null` for unpaid or paid-in-cash) -- drives the
    * balance row's own Stellar Expert link. */
   balancePaymentTxHash: string | null;
+  /** Issue #146: this booking's intake questions and the client's answers. */
+  intakeAnswers: IntakeAnswer[];
   /** Story 3.8: the client's private note on this booking (visible to the
    * shop and the client on the booking detail page, never on the public
    * profile or discovery). */
@@ -305,6 +321,20 @@ export interface ProviderBookingListItem extends BookingListItemBase {
   clientWalletAddress: string;
   /** Optional client contact email for the shop's post-release mailto draft. */
   clientEmail: string | null;
+  /** Issue #146: the client's answers to the shop's intake questions. */
+  intakeAnswers: IntakeAnswer[];
+  /** Issue #149: the balance recorded as settled in person on a cancelled
+   * booking, or `null` when none was recorded. */
+  inPersonBalance: InPersonBalance | null;
+}
+
+/** Issue #149: a recorded in-person balance and, once the shop corrected
+ * it, the figure it replaced. The shop may correct it only once. */
+export interface InPersonBalance {
+  amount: Money;
+  replaced: Money | null;
+  /** UTC epoch seconds of the correction, `null` until one is made. */
+  correctedAt: number | null;
 }
 
 export interface MyBookingsResponse {
@@ -403,6 +433,9 @@ export interface AdminDisputeListItem {
    * already awaiting chain confirmation for this booking -- the admin UI
    * hides/disables the row rather than let a second resolve be built. */
   pendingAction: PendingActionKind;
+  /** Issue #146: what the client told the shop, for the admin resolving
+   * this dispute. */
+  intakeAnswers: IntakeAnswer[];
 }
 
 export interface AdminDisputesResponse {

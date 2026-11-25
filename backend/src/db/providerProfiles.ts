@@ -316,3 +316,40 @@ export async function updateProviderProfileRules(db: Db, id: string, values: Pro
     throw new TypeError(`No provider profile exists with id "${id}"`);
   }
 }
+
+/** Issue #62: the shop's own pause/resume of new bookings. Idempotent --
+ * pausing an already-paused shop simply writes `true` again. */
+export async function setProviderProfileBookingsPaused(db: Db, id: string, bookingsPaused: boolean): Promise<void> {
+  const result = await db.update(providerProfiles).set({ bookingsPaused }).where(eq(providerProfiles.id, id));
+  if (result.changes === 0) {
+    throw new TypeError(`No provider profile exists with id "${id}"`);
+  }
+}
+
+/** Admin suspension: `null` clears it. Throws if `id` matches no row. */
+export async function setProviderProfileSuspension(
+  db: Db,
+  id: string,
+  suspension: { suspendedAt: number; reason: string } | null,
+): Promise<void> {
+  const result = await db
+    .update(providerProfiles)
+    .set({
+      suspendedAt: suspension?.suspendedAt ?? null,
+      suspensionReason: suspension?.reason ?? null,
+    })
+    .where(eq(providerProfiles.id, id));
+  if (result.changes === 0) {
+    throw new TypeError(`No provider profile exists with id "${id}"`);
+  }
+}
+
+/** Issues #146-#148: replaces the shop's intake questions (a JSON array of
+ * `{ id, label, required }`). Bookings already held keep their own copy of
+ * the questions they were asked -- this never rewrites them. */
+export async function setProviderProfileIntakeQuestions(db: Db, id: string, intakeQuestionsJson: string): Promise<void> {
+  const result = await db.update(providerProfiles).set({ intakeQuestions: intakeQuestionsJson }).where(eq(providerProfiles.id, id));
+  if (result.changes === 0) {
+    throw new TypeError(`No provider profile exists with id "${id}"`);
+  }
+}

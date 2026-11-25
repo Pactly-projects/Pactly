@@ -7,14 +7,22 @@
 import "./testConfigEnv.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { Keypair } from "@stellar/stellar-sdk";
 
 import {
+  filterSlotsOutsideAppointmentBuffer,
+  isSlotInsideBufferAfterLocked,
   validateWeeklyRanges,
   formatOverlapErrors,
   WeeklyRangeOverlapError,
   type WeeklyTimeRange,
   type OverlapError,
 } from "../src/services/availability.js";
+import { getPublicProviderProfile, updateProviderRules } from "../src/services/profile.js";
+import { holdSlot } from "../src/services/booking.js";
+import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
+import { updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
+import { closeDatabase, openTestDatabase, seedProviderProfile } from "./helpers.js";
 
 test("validateWeeklyRanges rejects overlapping ranges on the same weekday", () => {
   const ranges: WeeklyTimeRange[] = [
@@ -174,17 +182,7 @@ test("WeeklyRangeOverlapError carries overlap details", () => {
   assert.equal(error.overlaps.length, 1);
   assert.ok(error.message.includes("Monday"));
   assert.equal(error.name, "WeeklyRangeOverlapError");
-import { Keypair } from "@stellar/stellar-sdk";
-
-import {
-  filterSlotsOutsideAppointmentBuffer,
-  isSlotInsideBufferAfterLocked,
-} from "../src/services/availability.js";
-import { getPublicProviderProfile, updateProviderRules } from "../src/services/profile.js";
-import { holdSlot } from "../src/services/booking.js";
-import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
-import { updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
-import { closeDatabase, openTestDatabase, seedProviderProfile } from "./helpers.js";
+});
 
 const FAKE_USDC_DEPS = {
   resolveUsdcAsset: async () => ({ contractId: "CUSDCFAKE00000000000000000000000000000000000000000" }),

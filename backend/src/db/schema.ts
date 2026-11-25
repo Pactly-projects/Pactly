@@ -99,7 +99,22 @@ export const providerProfiles = sqliteTable("provider_profiles", {
   /** Minutes kept free after a locked booking before another slot may be
    * offered (0-120). Does not change weekly hours or move existing locks. */
   bufferMinutes: integer("buffer_minutes").notNull().default(0),
+  /** JSON array of `{ id, label, required }` -- the questions a client is
+   * asked on each booking. Each booking keeps its own copy of the questions
+   * it was asked (`bookings.intake_answers`), so changing these later never
+   * rewrites an answer already stored on a booking. */
+  intakeQuestions: text("intake_questions").notNull().default("[]"),
   isApproved: integer("is_approved", { mode: "boolean" }).notNull().default(false),
+  /**
+   * Admin suspension. A suspended shop stays `isApproved` -- it was
+   * approved once -- but every marketplace read excludes it
+   * (`db/providerProfiles.ts`), `getPublicProviderProfile` treats it as
+   * not found, and `holdSlot` refuses it, so it cannot take new bookings.
+   * `suspensionReason` is the latest reason an admin gave. Existing
+   * bookings are never touched.
+   */
+  suspendedAt: integer("suspended_at"),
+  suspensionReason: text("suspension_reason"),
   /** Issue #62: the shop's own pause on *new* bookings. Independent of
    * `isApproved` -- an admin suspension still hides the shop entirely, and
    * this pause never clears one. While `true`, discovery advertises the
@@ -227,6 +242,17 @@ export const bookings = sqliteTable("bookings", {
   /** Integer string, smallest unit (AD-7); the remainder of the session
    * price, settled off the escrow contract (Story 3.7). */
   balanceAmount: text("balance_amount").notNull().default("0"),
+  /**
+   * Issues #146-#148: the intake questions this booking was asked, each with
+   * the client's answer, as a JSON array of
+   * `{ questionId, label, required, answer }`. Copied from the shop's
+   * questions at hold time, so a later change to those questions never
+   * rewrites this booking. A question the client has not answered yet is
+   * kept with `answer: ""` -- never dropped -- so the shop still sees what
+   * was asked. Private to the client, the shop and an admin resolving a
+   * dispute: the public proof page and discovery never read this column.
+   */
+  intakeAnswers: text("intake_answers").notNull().default("[]"),
   /** UTC epoch seconds -- the same unit and value passed to `create_booking`. */
   cancelDeadline: integer("cancel_deadline").notNull(),
   /** `null` until the event worker records this booking's first event. */
@@ -401,6 +427,18 @@ export const bookings = sqliteTable("bookings", {
    * SUCCESS"). `null` for a booking whose balance is unpaid, or paid in
    * cash (which has no transaction to point at). */
   balancePaymentTxHash: text("balance_payment_tx_hash"),
+  /**
+   * Issue #149: the balance figure recorded as settled in person when this
+   * booking was cancelled (integer string, smallest unit, AD-7). `null`
+   * until a figure is recorded. The shop may correct it exactly once:
+   * the correction moves the first figure into
+   * `inPersonBalancePreviousAmount` and stamps `inPersonBalanceCorrectedAt`,
+   * so the original number is never lost and a second correction is refused.
+   */
+  inPersonBalanceAmount: text("in_person_balance_amount"),
+  inPersonBalancePreviousAmount: text("in_person_balance_previous_amount"),
+  /** UTC epoch seconds. */
+  inPersonBalanceCorrectedAt: integer("in_person_balance_corrected_at"),
 
   /**
    * Story 2.4: the SEP-6 local-currency deposit opened against this
@@ -842,6 +880,8 @@ export const savedShops = sqliteTable(
   },
   (table) => [unique().on(table.clientWalletAddress, table.providerProfileId)],
 );
+
+/**
  * Shop reports: a signed-in client can report a shop listing to admins.
  * One report per client per shop per day. Does not change the shop's status.
  */
@@ -881,3 +921,54 @@ export const waitlistEntries = sqliteTable(
 );
 
 export type WaitlistEntryRow = typeof waitlistEntries.$inferSelect;
+
+/**
+ * Issue #7: every escrow contract id a deploy ever returned for a booking,
+ * including one a later retry replaced. `bookings.escrow_contract_id` can
+ * only ever hold the current one, so a deploy that was replaced left a real
+ * contract -- possibly holding money -- that nothing in the app still links
+ * to; this table is what makes those visible to the client and to support.
+ *
+ * Write-only alongside that persisted id (never a replacement for it): every
+ * settlement call still reads `bookings.escrow_contract_id`, so a replaced
+ * id can never be used to move money by accident. Duplicate (booking,
+ * contract) pairs -- a retried lock that re-persisted the same deploy -- are
+ * recorded once.
+ */
+export const escrowContractDeployments = sqliteTable(
+  "escrow_contract_deployments",
+  {
+    bookingId: text("booking_id").notNull(),
+    /** The Trustless Work escrow's own identity (a Soroban `C...`) exactly
+     * as `deploy` returned it. */
+    contractId: text("contract_id").notNull(),
+    /** UTC epoch seconds -- when this contract id was persisted for the
+     * booking, the same clock `bookings.deploy_submitted_at` uses. */
+    deployedAt: integer("deployed_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.bookingId, table.contractId] })],
+);
+
+/**
+ * Issue #31: one row per party (client or provider) per booking-level event
+ * (lock, release, dispute, resolve). Every such action appends an event for
+ * each party to the booking, so both sides have an in-app list of what
+ * happened on a booking they are part of, newest first, linking to the
+ * booking. A row is scoped to one wallet -- one party never sees the other
+ * party's events for a booking they are not in (rows are keyed by
+ * `(booking_id, wallet_address)` plus the event's own order, so a party
+ * only ever reads rows for their own wallet on bookings they belong to).
+ */
+export const escrowEvents = sqliteTable("escrow_events", {
+  id: text("id").primaryKey(),
+  bookingId: text("booking_id")
+    .notNull()
+    .references(() => bookings.id),
+  /** Which party this event row is visible to -- the client's wallet or the
+   * provider's wallet on this booking. */
+  walletAddress: text("wallet_address").notNull(),
+  /** `lock` | `release` | `dispute` | `resolve`. */
+  type: text("type", { enum: ["lock", "release", "dispute", "resolve"] }).notNull(),
+  /** UTC epoch seconds -- the event's own wall-clock when it was recorded. */
+  createdAt: integer("created_at").notNull(),
+});

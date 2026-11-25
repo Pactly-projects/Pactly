@@ -57,6 +57,7 @@ import {
   XdrMismatchError,
   getBookingForClient,
 } from "./booking.js";
+import { accountHasUsdcTrustline } from "../anchor/trustline.js";
 
 export { BookingEscrowStateError, BookingHoldExpiredError, BookingNotFoundError, XdrMismatchError } from "./booking.js";
 
@@ -122,6 +123,10 @@ function fiatToMinor(decimal: string, decimals: number): bigint | undefined {
   const [whole = "0", fraction = ""] = decimal.trim().split(".");
   if (fraction.length > decimals) return undefined;
   return BigInt(whole) * (10n ** BigInt(decimals)) + BigInt(fraction.padEnd(decimals, "0"));
+}
+
+function toTwoDecimalPlaces(decimal: string): string {
+  return toConfiguredDecimalPlaces(decimal, 2);
 }
 
 function toConfiguredDecimalPlaces(decimal: string, decimals: number): string {

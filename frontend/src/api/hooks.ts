@@ -2,10 +2,11 @@
  * for provider/category data. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiGet, apiPost, apiPut, ApiError, apiDelete } from "./client";
 import { apiDelete, apiGet, apiPost, apiPut, ApiError } from "./client";
 import type {
   ActionResponse,
+  InPersonBalance,
+  IntakeAnswer,
   AdminDisputesResponse,
   BalancePaymentBuildResponse,
   BalancePaymentSubmitResponse,
@@ -535,6 +536,33 @@ export function markBookingArrived(bookingId: string, session: Session): Promise
   return apiPost<{ ok: true }>(`/bookings/${bookingId}/arrived`, {}, session.token);
 }
 
+/** Issue #147: the client changes their intake answers while the booking is
+ * still a hold. Answers are keyed by question id; a question left out keeps
+ * its current answer. Refused `409 INTAKE_LOCKED` once the deposit is
+ * locked, and `400 INVALID_INTAKE_ANSWERS` for a blank required answer. */
+export function updateIntakeAnswers(
+  bookingId: string,
+  answers: Record<string, string>,
+  session: Session,
+): Promise<{ intakeAnswers: IntakeAnswer[] }> {
+  return apiPut<{ intakeAnswers: IntakeAnswer[] }>(`/bookings/${bookingId}/intake`, { answers }, session.token);
+}
+
+/** Issue #149: the shop corrects a cancelled booking's recorded in-person
+ * balance, once. `amount` is an integer string in the asset's smallest
+ * unit. Refused `409 ALREADY_CORRECTED` on a second try. */
+export function correctInPersonBalance(
+  bookingId: string,
+  amount: string,
+  session: Session,
+): Promise<{ inPersonBalance: InPersonBalance }> {
+  return apiPost<{ inPersonBalance: InPersonBalance }>(
+    `/bookings/${bookingId}/balance/in-person/correct`,
+    { amount },
+    session.token,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Story 2.4: local-currency deposit. Imperative like lock/fund -- each
 // step waits on a wallet signature, so these are plain async functions.
@@ -781,6 +809,9 @@ export function useSavedShops(session: Session | undefined) {
     enabled: Boolean(session),
     retry: false,
   });
+}
+
+// ---------------------------------------------------------------------------
 // Shop reports: clients report a shop to admins.
 // ---------------------------------------------------------------------------
 

@@ -4,7 +4,7 @@
  * `../chain/event-worker.ts` -- which is what AD-1/AD-3 mean in practice:
  * nothing else may write `escrow_state`.
  */
-import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 
 import type { Db, DbOrTx } from "./client.js";
 import {
@@ -39,6 +39,8 @@ export interface NewBooking {
   /** Story 3.4 (AD-13): the hold's own expiry, UTC epoch seconds.
    * `undefined` only for a pre-3.4 caller. */
   holdExpiresAt?: number;
+  /** Issues #146-#148: JSON-encoded intake answers (see the schema). */
+  intakeAnswers?: string;
   createdAt: number;
 }
 
@@ -68,6 +70,7 @@ export async function insertBooking(db: Db, values: NewBooking): Promise<void> {
     balanceState: values.balanceState ?? "unpaid",
     slotId: values.slotId,
     holdExpiresAt: values.holdExpiresAt,
+    intakeAnswers: values.intakeAnswers ?? "[]",
     createdAt: values.createdAt,
   });
 }
@@ -96,12 +99,12 @@ export async function insertBookingHoldIfSlotFree(
     INSERT INTO bookings (
       id, provider_profile_id, client_wallet_address, client_email, token_address,
       deposit_amount, balance_amount, cancel_deadline, slot_id, hold_expires_at,
-      balance_state, created_at
+      balance_state, intake_answers, created_at
     )
     SELECT
       ${values.id}, ${values.providerProfileId}, ${values.clientWalletAddress}, ${values.clientEmail ?? null}, ${values.tokenAddress},
       ${values.depositAmount}, ${values.balanceAmount ?? "0"}, ${values.cancelDeadline}, ${values.slotId}, ${values.holdExpiresAt},
-      ${values.balanceState ?? "unpaid"}, ${values.createdAt}
+      ${values.balanceState ?? "unpaid"}, ${values.intakeAnswers ?? "[]"}, ${values.createdAt}
     WHERE NOT EXISTS (
       SELECT 1 FROM bookings existing
       WHERE existing.slot_id = ${values.slotId}
@@ -1071,4 +1074,136 @@ export async function markClientReminderShown(db: Db, bookingId: string, shownAt
  * never cleared, so a booking only shows its provider reminder once. */
 export async function markProviderReminderShown(db: Db, bookingId: string, shownAt: number): Promise<void> {
   await db.update(bookings).set({ providerReminderShownAt: shownAt }).where(eq(bookings.id, bookingId));
+}
+
+// ---------------------------------------------------------------------------
+// Issue #2: the two trust counters. Both are synchronous and meant to be
+// called inside the same `db.transaction()` as the state write that causes
+// them -- the booking-level marker makes the increment once-only even if the
+// same transition is observed twice (a replay, a second reconciler, or the
+// legacy event worker and the Trustless Work reconciler both seeing it).
+// ---------------------------------------------------------------------------
+
+/** Increments `provider_profiles.verified_session_count` for `bookingId` at
+ * most once, and returns whether it did. The `WHERE ... IS NULL` on the
+ * marker is what enforces "the same booking cannot increase the count
+ * twice" independently of any dedupe ledger. */
+export function recordVerifiedSessionCountedSync(
+  db: DbOrTx,
+  bookingId: string,
+  providerProfileId: string,
+  now: number,
+): boolean {
+  const marked = db
+    .update(bookings)
+    .set({ verifiedSessionCountedAt: now })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.verifiedSessionCountedAt)))
+    .run();
+  if (marked.changes === 0) {
+    return false;
+  }
+  db.update(providerProfiles)
+    .set({ verifiedSessionCount: sql`${providerProfiles.verifiedSessionCount} + 1` })
+    .where(eq(providerProfiles.id, providerProfileId))
+    .run();
+  return true;
+}
+
+/** The provider-cancellation sibling of
+ * {@link recordVerifiedSessionCountedSync}: increments
+ * `provider_profiles.provider_cancellation_count` at most once per booking.
+ * Only a dispute whose reason is `provider-cancel` ever calls this; a client
+ * cancelling, a no-show, a plain disagreement, a refund or a release never
+ * does. */
+export function recordProviderCancellationCountedSync(
+  db: DbOrTx,
+  bookingId: string,
+  providerProfileId: string,
+  now: number,
+): boolean {
+  const marked = db
+    .update(bookings)
+    .set({ providerCancellationCountedAt: now })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.providerCancellationCountedAt)))
+    .run();
+  if (marked.changes === 0) {
+    return false;
+  }
+  db.update(providerProfiles)
+    .set({ providerCancellationCount: sql`${providerProfiles.providerCancellationCount} + 1` })
+    .where(eq(providerProfiles.id, providerProfileId))
+    .run();
+  return true;
+}
+
+/**
+ * Marks a booking as arrived -- the provider's record that the client showed
+ * up. Succeeds (returns `true`) only once: the first call for a booking with
+ * no `arrivedAt` yet set. A second call returns `false` (keeps the first
+ * timestamp), and a call for a nonexistent booking also returns `false`.
+ */
+export async function markBookingArrived(db: Db, bookingId: string, arrivedAt: number): Promise<boolean> {
+  const result = await db
+    .update(bookings)
+    .set({ arrivedAt })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.arrivedAt)));
+  return result.changes > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Issues #146-#148: intake answers.
+// ---------------------------------------------------------------------------
+
+/** Issue #147: replaces a booking's intake answers, but only while it is
+ * still a hold -- the `WHERE` itself refuses once the deposit is locked
+ * (`escrow_state` set) or a deploy has been relayed (the lock is in
+ * flight), so an edit can never land after the lock even if it raced one.
+ * Returns whether the row was updated. */
+export async function updateIntakeAnswersWhileHold(db: Db, bookingId: string, intakeAnswers: string): Promise<boolean> {
+  const result = await db
+    .update(bookings)
+    .set({ intakeAnswers })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.escrowState), isNull(bookings.deploySubmittedAt)));
+  return result.changes > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #149: the in-person balance figure and its one correction.
+// ---------------------------------------------------------------------------
+
+/** Records the first in-person balance figure on a cancelled booking. Never
+ * overwrites an existing figure (returns `false` instead) -- a change to a
+ * recorded figure goes through {@link correctInPersonBalanceOnce}, which
+ * keeps the old one. */
+export async function recordInPersonBalance(db: Db, bookingId: string, amount: string): Promise<boolean> {
+  const result = await db
+    .update(bookings)
+    .set({ inPersonBalanceAmount: amount })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.inPersonBalanceAmount)));
+  return result.changes > 0;
+}
+
+/** Issue #149: the shop's one correction. In a single conditioned write it
+ * moves the current figure into `in_person_balance_previous_amount`, stores
+ * the new one and stamps the correction -- only for a cancelled
+ * (`refunded`) booking that already has a figure and has never been
+ * corrected. Returns whether it applied, so two concurrent corrections can
+ * never both land. */
+export async function correctInPersonBalanceOnce(db: Db, bookingId: string, amount: string, now: number): Promise<boolean> {
+  const result = await db
+    .update(bookings)
+    .set({
+      inPersonBalancePreviousAmount: sql`${bookings.inPersonBalanceAmount}`,
+      inPersonBalanceAmount: amount,
+      inPersonBalanceCorrectedAt: now,
+    })
+    .where(
+      and(
+        eq(bookings.id, bookingId),
+        eq(bookings.escrowState, "refunded"),
+        isNotNull(bookings.inPersonBalanceAmount),
+        isNull(bookings.inPersonBalanceCorrectedAt),
+      ),
+    );
+  return result.changes > 0;
 }

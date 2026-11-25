@@ -9,6 +9,7 @@ import { BookingCard, BALANCE_STATE_LABEL } from "../../components/BookingCard";
 import { Countdown } from "../../components/Countdown";
 import { DeclineHoldButton } from "../../components/DeclineHoldButton";
 import { PageMasthead } from "../../components/PageMasthead";
+import { ProviderBookingExtras } from "../../components/ProviderBookingExtras";
 import { StateLabel } from "../../components/StateLabel";
 import { TryAmount } from "../../components/TryAmount";
 import { bookingProofUrl, buildReleaseMailto } from "../../lib/releaseMailto";
@@ -152,6 +153,7 @@ export function BookingsPage() {
                   <th>State</th>
                   <th>Free cancellation</th>
                   <th>Records</th>
+                  <th>Client answers</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -207,6 +209,17 @@ export function BookingsPage() {
                       )}
                     </td>
                     <td>
+                      <ProviderBookingExtras
+                        bookingId={booking.id}
+                        escrowState={booking.escrowState}
+                        intakeAnswers={booking.intakeAnswers ?? []}
+                        inPersonBalance={booking.inPersonBalance ?? null}
+                        session={session}
+                        onChanged={() => bookingsQuery.refetch()}
+                        onUnauthorized={handleSignOut}
+                      />
+                    </td>
+                    <td>
                       <BookingActions
                         viewer="provider"
                         id={booking.id}
@@ -247,8 +260,8 @@ export function BookingsPage() {
 
           <div className="booking-list bookings-cards">
             {active.map((booking) => (
+              <div key={booking.id} className="provider-booking-card">
               <BookingCard
-                key={booking.id}
                 viewer="provider"
                 id={booking.id}
                 heading="Client id"
@@ -272,6 +285,16 @@ export function BookingsPage() {
                 declinedAt={booking.declinedAt}
                 canDecline={canDeclineHold(booking)}
               />
+              <ProviderBookingExtras
+                bookingId={booking.id}
+                escrowState={booking.escrowState}
+                intakeAnswers={booking.intakeAnswers ?? []}
+                inPersonBalance={booking.inPersonBalance ?? null}
+                session={session}
+                onChanged={() => bookingsQuery.refetch()}
+                onUnauthorized={handleSignOut}
+              />
+              </div>
             ))}
           </div>
         </>

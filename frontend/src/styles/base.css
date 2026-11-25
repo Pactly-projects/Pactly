@@ -1336,6 +1336,72 @@ button {
   margin-bottom: 5px;
 }
 
+/* Issues #146-#149: intake answers and the in-person balance correction. */
+.intake-answers form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.intake-answers__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.intake-answers__field input {
+  font: inherit;
+  padding: var(--space-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+}
+
+.intake-answers__field input[aria-invalid="true"] {
+  border-color: var(--color-alert, currentColor);
+}
+
+.intake-answers__list {
+  margin: var(--space-2) 0 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.intake-answers__list dt {
+  font-weight: 500;
+}
+
+.intake-answers__list dd {
+  margin: 0;
+}
+
+.intake-answers__blank {
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+.provider-booking-extras {
+  display: grid;
+  gap: var(--space-3);
+  font-size: var(--text-13);
+}
+
+.provider-booking-card {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.in-person-balance form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.in-person-balance__replaced {
+  color: var(--color-muted);
+}
+
 .payment-method {
   margin-top: 0;
   display: flex;

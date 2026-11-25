@@ -14,6 +14,7 @@ import {
   simulateLocalDeposit,
   submitLocalDepositTrustline,
   submitSignedTransaction,
+  updateIntakeAnswers,
   useBooking,
   useHoldSlot,
   usePublicProviderProfile,
@@ -27,6 +28,8 @@ import { EscrowConfirmation } from "../../components/EscrowConfirmation";
 import { EscrowLane } from "../../components/EscrowLane";
 import { LocalCurrencyPanel, localDepositErrorMessage } from "../../components/LocalCurrencyPanel";
 import { LockButton } from "../../components/LockButton";
+import { IntakeAnswersForm } from "../../components/IntakeAnswersForm";
+import { lockBlockedReason as describeLockBlock } from "../../lib/intakeAnswers";
 import { ProviderHeader } from "../../components/ProviderHeader";
 import { Seal } from "../../components/Seal";
 import { TryAmount, useFormatTry } from "../../components/TryAmount";
@@ -183,6 +186,27 @@ export function BookingPage() {
   const booking = useBooking(hold?.bookingId, session, {
     enabled: Boolean(hold?.bookingId && session),
   });
+
+  // Issues #146-#148: the booking's own intake questions and the answers so
+  // far. Editable only while this is still a hold -- once a deploy is
+  // relayed or the deposit is locked, the server refuses an edit too.
+  const intakeAnswers = booking.data?.intakeAnswers ?? hold?.intakeAnswers ?? [];
+  const intakeEditable =
+    Boolean(hold) && !isLocked && booking.data?.escrowState == null && !booking.data?.deploySubmitted;
+  const lockBlockedReason = intakeEditable ? describeLockBlock(intakeAnswers) : undefined;
+
+  async function saveIntakeAnswers(answers: Record<string, string>): Promise<void> {
+    if (!hold || !session) return;
+    try {
+      await updateIntakeAnswers(hold.bookingId, answers, session);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        handleUnauthorized();
+      }
+      throw error;
+    }
+    await booking.refetch();
+  }
 
   const prefersReducedMotion = useMemo(
     () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
@@ -536,6 +560,14 @@ export function BookingPage() {
   function handleFlowError(error: unknown): void {
     if (error instanceof ApiError && error.status === 401) {
       handleUnauthorized();
+      return;
+    }
+    // Issue #148: a required intake answer is blank. Nothing was built and
+    // the hold is still there -- the client answers and locks again.
+    if (error instanceof ApiError && error.code === "INTAKE_INCOMPLETE") {
+      setPhase("idle");
+      setFlowNotice(error.message);
+      void booking.refetch();
       return;
     }
     // Issue #6: this booking's first deploy is already running on another
@@ -1082,6 +1114,14 @@ export function BookingPage() {
             </div>
           </div>
 
+          {hold && (
+            <IntakeAnswersForm
+              answers={intakeAnswers}
+              editable={intakeEditable}
+              onSave={saveIntakeAnswers}
+            />
+          )}
+
           <div className="booking-summary-note">
             <b>YOUR PROTECTION</b>
             <p>
@@ -1192,6 +1232,7 @@ export function BookingPage() {
                         waitingOn={waitingOn}
                         actionLabel={actionLabel}
                         disabled={lockInFlight}
+                        blockedReason={lockBlockedReason}
                         onClick={() => void runLockFlow()}
                         onOpenWalletAgain={() => void retryPendingSignature()}
                       />
@@ -1240,6 +1281,7 @@ export function BookingPage() {
                   waitingOn={waitingOn}
                   actionLabel={actionLabel}
                   disabled={lockInFlight}
+                  blockedReason={lockBlockedReason}
                   onClick={() => void runLockFlow()}
                   onOpenWalletAgain={() => void retryPendingSignature()}
                 />

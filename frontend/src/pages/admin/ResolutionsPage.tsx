@@ -5,6 +5,7 @@ import { ScalesIcon } from "@phosphor-icons/react";
 import { ApiError } from "../../api/client";
 import { resolveDispute, submitSignedTransaction, useAdminDisputes } from "../../api/hooks";
 import { PageMasthead } from "../../components/PageMasthead";
+import { displayAnswer } from "../../lib/intakeAnswers";
 import { TryAmount } from "../../components/TryAmount";
 import { shortenStellarId } from "../../lib/stellar";
 import { formatSlotDay, formatSlotTime } from "../../lib/time";
@@ -129,6 +130,17 @@ function DisputeRow({
           ? `Policy suggestion: ${SUGGESTED_OUTCOME_LABEL[dispute.suggestedOutcome]}.`
           : "The booking policy has no automatic suggestion for a plain disagreement."}
       </p>
+      {/* Issue #146: what the client told the shop, for the admin resolving it. */}
+      {(dispute.intakeAnswers ?? []).length > 0 && (
+        <dl className="intake-answers__list">
+          {dispute.intakeAnswers.map((entry) => (
+            <div key={entry.questionId}>
+              <dt>{entry.label}</dt>
+              <dd>{displayAnswer(entry.answer)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
       {resolvePending ? (
         <p className="booking-card__notice" aria-live="polite">
           Waiting for the network to confirm.

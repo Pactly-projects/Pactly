@@ -12,6 +12,11 @@ export interface LockButtonProps {
    * "Lock with Pactly". */
   actionLabel?: string;
   disabled?: boolean;
+  /** Issue #148: why the lock is held back (e.g. a required intake answer
+   * is blank), in plain words. While set, the button is disabled and the
+   * reason is shown beneath it. The server refuses the lock for the same
+   * reason regardless, so this is a convenience, never the only check. */
+  blockedReason?: string;
   onClick: () => void;
   /** Fires when the user taps "Try again" after the 60s timeout --
    * re-runs the same signature request. Kept under its historical name so
@@ -30,7 +35,7 @@ const RETRY_AFTER_MS = 60_000;
  * the way. Signing happens server-side now -- there is no prompt for the
  * user to find and approve.
  */
-export function LockButton({ waitingOn, actionLabel, disabled, onClick, onOpenWalletAgain }: LockButtonProps) {
+export function LockButton({ waitingOn, actionLabel, disabled, blockedReason, onClick, onOpenWalletAgain }: LockButtonProps) {
   const [showTryAgain, setShowTryAgain] = useState(false);
 
   useEffect(() => {
@@ -44,10 +49,15 @@ export function LockButton({ waitingOn, actionLabel, disabled, onClick, onOpenWa
 
   return (
     <div className="lock-button-group">
-      <button type="button" className="button-escrow" disabled={disabled || Boolean(waitingOn)} onClick={onClick} aria-live="polite" aria-label="Lock with Pactly">
+      <button type="button" className="button-escrow" disabled={disabled || Boolean(waitingOn) || Boolean(blockedReason)} onClick={onClick} aria-live="polite" aria-label="Lock with Pactly">
         {waitingOn ? "Locking…" : "Lock with Pactly"}
       </button>
       {waitingOn && <p className="lock-button-group__hint">{waitingOn}</p>}
+      {!waitingOn && blockedReason && (
+        <p className="lock-button-group__hint" role="status">
+          {blockedReason}
+        </p>
+      )}
       {waitingOn && showTryAgain && (
         <button type="button" className="button-ghost lock-button-group__retry" onClick={onOpenWalletAgain} aria-label="Try again">
           Try again

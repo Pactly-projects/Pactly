@@ -92,6 +92,16 @@ import {
   type BookingRow,
   type EscrowActionKind,
 } from "../db/bookings.js";
+import { correctInPersonBalanceOnce, updateIntakeAnswersWhileHold } from "../db/bookings.js";
+import {
+  applyIntakeAnswerEdit,
+  missingRequiredIntakeAnswers,
+  parseIntakeAnswers,
+  parseIntakeQuestions,
+  serializeIntakeAnswers,
+  snapshotIntakeAnswers,
+  type IntakeAnswer,
+} from "./intake.js";
 import { getSlotById, getSlotByProviderAndStart } from "../db/availabilitySlots.js";
 import { isDateClosed, utcDateFor } from "../db/closedDates.js";
 import {
@@ -116,6 +126,9 @@ import {
 import { PaymentUnavailableError } from "../payments/errors.js";
 import type { Db } from "../db/client.js";
 import { BALANCE_STATES, type BalanceState, type DisputeOpenerRole, type DisputeOutcome, type DisputeReason } from "../db/schema.js";
+import { insertAdminDecisionAuditSync } from "../db/adminDecisionAudit.js";
+import { listContractDeployments, recordContractDeployment } from "../db/escrowContractDeployments.js";
+import { recordEscrowEventForBothParties } from "../db/escrowEvents.js";
 
 /** Pactly's only supported asset for now (PRD): the deposit's trustline
  * symbol every `lockDeposit` deploy names. Not yet a per-booking or
@@ -298,6 +311,43 @@ export class BookingHoldExpiredError extends Error {
   }
 }
 
+/** Issue #148: the lock is refused because a required intake question on
+ * this booking has no answer. `questions` names every such question, so
+ * the client can see exactly what is missing. Nothing about the hold is
+ * changed: it stays in place for the client to answer and lock again. */
+export class IntakeAnswersIncompleteError extends Error {
+  readonly questions: { questionId: string; label: string }[];
+  constructor(missing: IntakeAnswer[]) {
+    const labels = missing.map((entry) => `"${entry.label}"`).join(", ");
+    super(
+      missing.length === 1
+        ? `Answer ${labels} before locking your deposit.`
+        : `Answer these questions before locking your deposit: ${labels}.`,
+    );
+    this.name = "IntakeAnswersIncompleteError";
+    this.questions = missing.map(({ questionId, label }) => ({ questionId, label }));
+  }
+}
+
+/** Issue #147: intake answers can only change while the booking is a hold. */
+export class IntakeAnswersLockedError extends Error {
+  constructor(message = "Your deposit is locked, so these answers can no longer be changed.") {
+    super(message);
+    this.name = "IntakeAnswersLockedError";
+  }
+}
+
+/** Issue #149: the in-person balance correction was refused. `reason`
+ * says why, for the route's error code. */
+export class InPersonBalanceCorrectionError extends Error {
+  readonly reason: "not_cancelled" | "no_figure" | "already_corrected" | "invalid_amount";
+  constructor(reason: InPersonBalanceCorrectionError["reason"], message: string) {
+    super(message);
+    this.name = "InPersonBalanceCorrectionError";
+    this.reason = reason;
+  }
+}
+
 /** Issue #6: this booking's first setup is already running on another
  * request, which holds its one in-flight claim, so no second one is built
  * here. The client's own double click lands on this refusal rather than a
@@ -328,6 +378,10 @@ export interface HoldSlotInput {
   tzOffsetMinutes?: number;
   /** Optional client contact email for the shop's post-release mailto draft. */
   clientEmail?: string | null;
+  /** Issues #146-#148: the client's answers to the shop's intake questions,
+   * as `{ questionId: answer }`. Optional and allowed to be incomplete --
+   * the lock, not the hold, refuses a blank required answer. */
+  intakeAnswers?: unknown;
 }
 
 export interface HoldSlotResult {
@@ -342,6 +396,9 @@ export interface HoldSlotResult {
    * `cancelDeadline`, never from the browser clock alone. */
   serverTime: number;
   provider: BookingProviderSummary;
+  /** Issues #146-#148: the questions this booking asks, each with the
+   * client's answer so far (blank when unanswered). */
+  intakeAnswers: IntakeAnswer[];
   /** Set when a resume read finds an expired, never-deployed hold rather
    * than an active hold or a new hold. */
   isExpiredHold?: true;
@@ -468,6 +525,7 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
       cancelDeadline: existing.cancelDeadline,
       serverTime: now,
       provider,
+      intakeAnswers: parseIntakeAnswers(existing.intakeAnswers),
       ...(existing.cancelDeadline <= now ? { freeCancellationEnded: true as const } : {}),
     };
   }
@@ -484,6 +542,7 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
         cancelDeadline: expired.cancelDeadline,
         serverTime: now,
         provider,
+        intakeAnswers: parseIntakeAnswers(expired.intakeAnswers),
         isExpiredHold: true,
       };
     }
@@ -502,6 +561,7 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
   const cancelDeadline = input.slotStartsAt - profile.cancellationWindowHours * 3600;
   const bookingId = generateBookingId();
   const holdExpiresAt = now + HOLD_DURATION_SECONDS;
+  const intakeAnswers = snapshotIntakeAnswers(parseIntakeQuestions(profile.intakeQuestions), input.intakeAnswers);
 
   const inserted = await insertBookingHoldIfSlotFree(
     db,
@@ -516,6 +576,7 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
       cancelDeadline,
       slotId: slot.id,
       holdExpiresAt,
+      intakeAnswers: serializeIntakeAnswers(intakeAnswers),
       createdAt: Date.now(),
     },
     now,
@@ -544,6 +605,7 @@ export async function holdSlot(db: Db, input: HoldSlotInput, deps: HoldSlotDeps 
     cancelDeadline,
     serverTime: now,
     provider,
+    intakeAnswers,
     ...(cancelDeadline <= now ? { freeCancellationEnded: true as const } : {}),
   };
 }
@@ -683,6 +745,20 @@ async function requireProviderAddress(db: Db, booking: BookingRow): Promise<stri
  * the same goes for a persisted `escrowContractId`, which is the evidence
  * that a deploy was already submitted and this is no longer an uncommitted
  * hold. */
+/** Refuses {@link SlotInPastError} when the booking's slot has already
+ * started (or is starting right now) according to the server clock.
+ * This check applies to `lockDeposit` and `fundDeposit` -- a hold may have
+ * been created when the slot was in the future, but locking/funding must
+ * be refused once the slot start time has passed. */
+async function requireSlotNotInPast(db: Db, booking: BookingRow, now: number): Promise<void> {
+  if (booking.slotId !== null) {
+    const slot = await getSlotById(db, booking.slotId);
+    if (slot && slot.startsAt <= now) {
+      throw new SlotInPastError(slot.startsAt, now);
+    }
+  }
+}
+
 function requireHoldNotExpired(booking: BookingRow, now: number): void {
   if (
     booking.escrowState === null
@@ -820,6 +896,14 @@ export async function lockDeposit(
   requireHoldNotDeclined(booking);
   requireHoldNotExpired(booking, now);
   await requireSlotNotInPast(db, booking, now);
+
+  // Issue #148: a booking the shop cannot prepare for is never locked. Checked
+  // here, on the server, whatever the form sent -- and before anything is
+  // written or built, so a refusal leaves the hold exactly as it was.
+  const missingAnswers = missingRequiredIntakeAnswers(parseIntakeAnswers(booking.intakeAnswers));
+  if (missingAnswers.length > 0) {
+    throw new IntakeAnswersIncompleteError(missingAnswers);
+  }
 
   // Issue #48: Validate that the anchor transfer credited enough to cover
   // the deposit. A missing transfer (no anchorDepositId) is refused, as is
@@ -1534,6 +1618,9 @@ export interface AdminDisputeListItem {
    * already awaiting chain confirmation for this booking -- the admin UI
    * hides/disables the row rather than let a second resolve be built. */
   pendingAction: EscrowActionKind | null;
+  /** Issue #146: an admin resolving the dispute may read what the client
+   * told the shop. */
+  intakeAnswers: IntakeAnswer[];
 }
 
 /**
@@ -1593,6 +1680,7 @@ export async function listOpenDisputes(db: Db): Promise<AdminDisputeListItem[]> 
       clientWalletAddress: booking.clientWalletAddress,
       slotStartsAt: slot?.startsAt ?? null,
       pendingAction: derivePendingAction(booking, "disputed"),
+      intakeAnswers: parseIntakeAnswers(booking.intakeAnswers),
     };
   });
 }
@@ -1856,6 +1944,86 @@ export async function markBalancePaidCash(db: Db, bookingId: string, providerWal
 }
 
 /**
+ * Issue #147: `PUT /bookings/:id/intake` -- the booking's own client changes
+ * their intake answers while the booking is still only a hold. Only the
+ * questions this booking was asked can be answered (see
+ * {@link applyIntakeAnswerEdit}); the shop reads the edited answers from the
+ * same row.
+ *
+ * - Another client's booking, or an unknown id: {@link BookingNotFoundError}.
+ * - A locked booking, or one whose lock is already in flight (a deploy was
+ *   relayed): {@link IntakeAnswersLockedError}. The write itself is
+ *   conditioned on that too, so an edit that races the lock still loses.
+ * - A declined or expired hold: {@link BookingEscrowStateError} /
+ *   {@link BookingHoldExpiredError} -- there is nothing left to prepare for.
+ * - A required answer edited to blank, or an unknown question:
+ *   `InvalidIntakeAnswersError`, and nothing is saved.
+ */
+export async function updateIntakeAnswers(
+  db: Db,
+  bookingId: string,
+  clientWalletAddress: string,
+  rawAnswers: unknown,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<IntakeAnswer[]> {
+  const booking = await getBookingForClient(db, bookingId, clientWalletAddress);
+  if (booking.escrowState !== null || booking.deploySubmittedAt !== null) {
+    throw new IntakeAnswersLockedError();
+  }
+  requireHoldNotDeclined(booking);
+  requireHoldNotExpired(booking, now);
+  const next = applyIntakeAnswerEdit(parseIntakeAnswers(booking.intakeAnswers), rawAnswers);
+  const saved = await updateIntakeAnswersWhileHold(db, bookingId, serializeIntakeAnswers(next));
+  if (!saved) {
+    throw new IntakeAnswersLockedError();
+  }
+  return next;
+}
+
+/**
+ * Issue #149: `POST /bookings/:id/balance/in-person/correct` -- the shop
+ * corrects the in-person balance figure recorded on a cancelled booking,
+ * once. The first figure is kept as the replaced one; a second correction
+ * is refused. `amount` is an integer string in the asset's smallest unit
+ * (AD-7), like every other amount.
+ *
+ * - Any wallet but this booking's own shop: {@link BookingNotFoundError}.
+ * - A booking that is not cancelled, has no recorded figure, or was already
+ *   corrected: {@link InPersonBalanceCorrectionError}.
+ */
+export async function correctInPersonBalance(
+  db: Db,
+  bookingId: string,
+  providerWalletAddress: string,
+  amount: unknown,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<InPersonBalanceView> {
+  if (typeof amount !== "string" || !/^(0|[1-9]\d*)$/.test(amount) || amount.length > 39) {
+    throw new InPersonBalanceCorrectionError(
+      "invalid_amount",
+      "Give the corrected balance as a whole number in the asset's smallest unit.",
+    );
+  }
+  const booking = await getBookingForProvider(db, bookingId, providerWalletAddress);
+  if (booking.escrowState !== "refunded") {
+    throw new InPersonBalanceCorrectionError("not_cancelled", "Only a cancelled booking's in-person balance can be corrected.");
+  }
+  if (booking.inPersonBalanceAmount === null) {
+    throw new InPersonBalanceCorrectionError("no_figure", "This booking has no recorded in-person balance to correct.");
+  }
+  if (booking.inPersonBalanceCorrectedAt !== null) {
+    throw new InPersonBalanceCorrectionError("already_corrected", "This in-person balance was already corrected once.");
+  }
+  const applied = await correctInPersonBalanceOnce(db, bookingId, amount, now);
+  if (!applied) {
+    // Another correction landed between the read above and this write.
+    throw new InPersonBalanceCorrectionError("already_corrected", "This in-person balance was already corrected once.");
+  }
+  const updated = await getBookingById(db, bookingId);
+  return toInPersonBalanceView(updated!)!;
+}
+
+/**
  * `POST /bookings/:id/arrived`: the shop marks when a client walks in for a
  * locked booking. Refused (typed {@link BookingNotFoundError}) for anyone
  * but this booking's own provider; refused (typed
@@ -2051,6 +2219,9 @@ export interface BookingView {
    * no transaction to point at). Drives the balance row's own Stellar
    * Expert link, per the spec's own "Always" rule. */
   balancePaymentTxHash: string | null;
+  /** Issue #146: the booking's own intake questions and the client's
+   * answers -- this view is only ever built for the booking's own client. */
+  intakeAnswers: IntakeAnswer[];
   /** Story 3.8: the client's private note on this booking (visible to the
    * shop and the client on the booking detail page, never on the public
    * profile or discovery). */
@@ -2133,6 +2304,7 @@ export async function getBookingView(
       ? { id: profile.id, displayName: profile.displayName, title: profile.title }
       : { id: booking.providerProfileId, displayName: "", title: "" },
     balancePaymentTxHash: booking.balancePaymentTxHash,
+    intakeAnswers: parseIntakeAnswers(booking.intakeAnswers),
     note: booking.note,
     reminderShown,
     disputeOpenedByWallet,
@@ -2421,6 +2593,33 @@ export interface ProviderBookingListItem extends BookingListItemBase {
   clientWalletAddress: string;
   /** Optional client contact email for the shop's post-release mailto draft. */
   clientEmail: string | null;
+  /** Issue #146: the client's answers to the shop's own intake questions. */
+  intakeAnswers: IntakeAnswer[];
+  /** Issue #149: the balance recorded as settled in person on a cancelled
+   * booking (`null` when none was recorded), and the figure it replaced if
+   * the shop corrected it. */
+  inPersonBalance: InPersonBalanceView | null;
+}
+
+export interface InPersonBalanceView {
+  amount: Money;
+  /** The first recorded figure, once a correction replaced it; `null`
+   * until then. */
+  replaced: Money | null;
+  /** UTC epoch seconds of the correction, `null` until one is made. */
+  correctedAt: number | null;
+}
+
+function toInPersonBalanceView(booking: BookingRow): InPersonBalanceView | null {
+  if (booking.inPersonBalanceAmount === null) {
+    return null;
+  }
+  return {
+    amount: { amount: booking.inPersonBalanceAmount, asset: ASSET },
+    replaced:
+      booking.inPersonBalancePreviousAmount === null ? null : { amount: booking.inPersonBalancePreviousAmount, asset: ASSET },
+    correctedAt: booking.inPersonBalanceCorrectedAt,
+  };
 }
 
 function isExpiredHoldRow(booking: BookingRow, now: number): boolean {
@@ -2581,6 +2780,8 @@ export async function listBookingsForProvider(
     ...toBookingListItemBase(booking, slotStartsAt, lifecycleByBooking.get(booking.id), now, remindersShown.has(booking.id)),
     clientWalletAddress: booking.clientWalletAddress,
     clientEmail: booking.clientEmail ?? null,
+    intakeAnswers: parseIntakeAnswers(booking.intakeAnswers),
+    inPersonBalance: toInPersonBalanceView(booking),
   }));
   items.sort((a, b) => compareByAppointmentDate(a, b, now));
   return items;
