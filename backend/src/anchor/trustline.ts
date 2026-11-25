@@ -86,6 +86,21 @@ export async function accountHasUsdcTrustline(
   }
 }
 
+/** Read-only counterpart to {@link requireUsdcTrustline}: `true` when
+ * `account` holds the anchor's own USDC, `false` when it does not. Nothing
+ * is written and no transaction is built -- the dashboard's warning uses
+ * this, never `requireUsdcTrustline`'s refusal. Discovery and Horizon
+ * failures still throw, so a caller that must keep rendering can catch
+ * them and treat the answer as unknown rather than "missing". */
+export async function hasUsdcTrustline(account: string, deps: UsdcTrustlineDeps = {}): Promise<boolean> {
+  const resolveUsdc = deps.resolveUsdcAsset ?? resolveUsdcAsset;
+  const hasTrustline =
+    deps.hasTrustline ?? ((address: string, code: string, issuer: string) => accountHasUsdcTrustline(address, code, issuer, deps));
+
+  const usdc = await resolveUsdc();
+  return hasTrustline(account, usdc.code, usdc.issuer);
+}
+
 /** Refuses (typed {@link UsdcTrustlineMissingError}) unless `account` can
  * hold the anchor's USDC. Nothing is written and no transaction is built by
  * this call -- it is a gate a caller runs *before* it touches money. */

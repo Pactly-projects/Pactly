@@ -327,8 +327,15 @@ export interface MyBookingsResponse {
   bookings: ClientBookingListItem[];
 }
 
+/** The provider dashboard's own wallet readiness: `null` when the read
+ * could not be answered, in which case no warning is shown. */
+export interface ProviderTrustlineStatus {
+  hasTrustline: boolean | null;
+}
+
 export interface ProviderBookingsResponse {
   bookings: ProviderBookingListItem[];
+  trustline: ProviderTrustlineStatus;
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +640,70 @@ export interface AdminApplicationsResponse {
 }
 
 export type ProviderApplicationOutcome = "approve" | "reject";
+
+// ---------------------------------------------------------------------------
+// Saved shops: a client's personal list of shops they want to book again.
+// ---------------------------------------------------------------------------
+
+export interface SaveShopResponse {
+  savedShopId: string;
+}
+
+export interface UnsaveShopResponse {
+  unsaved: boolean;
+}
+
+export interface IsShopSavedResponse {
+  isSaved: boolean;
+}
+
+export interface SavedShop {
+  id: string;
+  provider: {
+    id: string;
+    displayName: string;
+    title: string;
+    location: string;
+    categoryId: string;
+    sessionFormat: string;
+    sessionLengthMinutes: number;
+    priceAmount: string;
+    depositRateBps: number;
+    cancellationWindowHours: number;
+    isApproved: boolean;
+    verifiedSessionCount: number;
+  };
+  savedAt: number;
+}
+
+export interface SavedShopsResponse {
+  shops: SavedShop[];
+}
+
+// ---------------------------------------------------------------------------
+// Shop reports: clients can report a shop to admins.
+// ---------------------------------------------------------------------------
+
+export interface ShopReportSubmitResponse {
+  reportId: string;
+}
+
+export interface ShopReport {
+  id: string;
+  reason: string;
+  createdAt: number;
+  reportedByWallet: string;
+  provider: {
+    id: string;
+    displayName: string;
+    walletAddress: string;
+    isApproved: boolean;
+  };
+}
+
+export interface ShopReportsListResponse {
+  reports: ShopReport[];
+}
 
 // ---------------------------------------------------------------------------
 // Public booking proof (shareable, no sign-in)

@@ -131,6 +131,7 @@ import {
   submitSignedTransaction,
   type BuildBalancePaymentDeps,
 } from "./services/booking.js";
+import { getProviderTrustlineStatus } from "./services/providerTrustline.js";
 import {
   BookingOutsideCancellationWindowError,
   InvalidCloseDateError,
@@ -1865,11 +1866,16 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
   /** The provider panel's "Bookings" view: every booking against the
    * caller's own provider profile, ordered by appointment date. A wallet
    * with no provider profile gets the same `404 NOT_A_PROVIDER` every other
-   * `/me/provider` route already gives. */
+   * `/me/provider` route already gives. The response also carries the
+   * shop's own USDC trustline readiness so the dashboard can warn before a
+   * client discovers it by failing to lock; a failed check is `null` and
+   * never hides the bookings below it. */
   app.get("/me/provider/bookings", requirePactlyAuth, async (c) => {
+    const walletAddress = c.get("walletAddress");
     try {
-      const bookingsList = await listBookingsForProvider(db, c.get("walletAddress"));
-      return c.json({ bookings: bookingsList });
+      const bookingsList = await listBookingsForProvider(db, walletAddress);
+      const trustline = await getProviderTrustlineStatus(walletAddress, usdcTrustlineDeps);
+      return c.json({ bookings: bookingsList, trustline });
     } catch (error) {
       if (error instanceof NotAProviderError) {
         return c.json({ code: "NOT_A_PROVIDER", message: error.message }, 404);
@@ -2511,6 +2517,33 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
     }
   });
 
+  // ---------------------------------------------------------------------
+  // Saved shops: a client's personal list of shops they want to book again.
+  // ---------------------------------------------------------------------
+
+  /** A signed-in client saves an approved shop. Idempotent. */
+  app.post("/providers/:id/save", requirePactlyAuth, async (c) => {
+    const providerProfileId = c.req.param("id");
+    if (!providerProfileId) {
+      return c.json({ code: "invalid_request", message: "provider id is required." }, 400);
+    }
+
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const result = await saveShop(db, c.get("walletAddress"), providerProfileId, now);
+      return c.json(result, 201);
+    } catch (error) {
+      if (error instanceof SavedShopNotFoundError) {
+        return c.json({ code: "SHOP_NOT_FOUND", message: error.message }, 404);
+      }
+      if (error instanceof ShopNotApprovedError) {
+        return c.json({ code: "SHOP_NOT_APPROVED", message: error.message }, 409);
+      }
+      throw error;
+    }
+  });
+
+  // ---------------------------------------------------------------------
   // Story 5.8: admin category management. Any admin wallet may create a
   // category or hide/show an existing one.
   // ---------------------------------------------------------------------
@@ -2570,10 +2603,9 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
     if (!providerProfileId) {
       return c.json({ code: "invalid_request", message: "provider id is required." }, 400);
     }
-
     const body = await c.req.json().catch(() => undefined);
     const reason = typeof body?.reason === "string" ? body.reason : "";
-    
+
     try {
       const now = Math.floor(Date.now() / 1000);
       const result = await submitShopReport(
@@ -2653,6 +2685,7 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
     const shops = await getSavedShopsForClient(db, c.get("walletAddress"));
     return c.json({ shops });
   });
+
   /** Admins list all shop reports, newest first. */
   app.get("/admin/shop-reports", requirePactlyAuth, requireAdmin, async (c) => {
     const reports = await getShopReportsForAdmin(db);

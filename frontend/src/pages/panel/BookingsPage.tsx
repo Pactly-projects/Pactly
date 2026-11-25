@@ -14,6 +14,7 @@ import { TryAmount } from "../../components/TryAmount";
 import { bookingProofUrl, buildReleaseMailto } from "../../lib/releaseMailto";
 import { shortenStellarId, stellarExplorerContractUrl, stellarExplorerTransactionUrl, trustlessWorkViewerUrl } from "../../lib/stellar";
 import { formatSlotDay, formatSlotTime } from "../../lib/time";
+import { shouldShowTrustlineWarning } from "../../lib/trustlineWarning";
 import { SignInPanel } from "../../components/SignInPanel";
 import { getSession, signOut, type Session } from "../../wallet";
 import type { ProviderBookingListItem } from "../../api/types";
@@ -115,6 +116,7 @@ export function BookingsPage() {
   const bookings = bookingsQuery.data?.bookings ?? [];
   const active = bookings.filter((booking) => !booking.isExpiredHold);
   const expired = bookings.filter((booking) => booking.isExpiredHold);
+  const showTrustlineWarning = shouldShowTrustlineWarning(bookingsQuery.data?.trustline);
 
   return (
     <div className="page">
@@ -132,6 +134,15 @@ export function BookingsPage() {
           </>
         }
       />
+
+      {showTrustlineWarning && (
+        <div className="banner banner--alert" role="status">
+          <p>
+            Your wallet isn't ready to receive USDC yet, so clients can't lock a deposit with you. Your
+            existing bookings are still listed below.
+          </p>
+        </div>
+      )}
 
       {active.length === 0 && (
         <div className="banner" role="status">

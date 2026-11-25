@@ -8,13 +8,26 @@ import "./testConfigEnv.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { Keypair } from "@stellar/stellar-sdk";
+
 import {
   validateWeeklyRanges,
   formatOverlapErrors,
   WeeklyRangeOverlapError,
+  filterSlotsOutsideAppointmentBuffer,
+  isSlotInsideBufferAfterLocked,
   type WeeklyTimeRange,
   type OverlapError,
 } from "../src/services/availability.js";
+import { getPublicProviderProfile, updateProviderRules } from "../src/services/profile.js";
+import { holdSlot } from "../src/services/booking.js";
+import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
+import { updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
+import { closeDatabase, openTestDatabase, seedProviderProfile } from "./helpers.js";
+
+const FAKE_USDC_DEPS = {
+  resolveUsdcAsset: async () => ({ contractId: "CUSDCFAKE00000000000000000000000000000000000000000" }),
+};
 
 test("validateWeeklyRanges rejects overlapping ranges on the same weekday", () => {
   const ranges: WeeklyTimeRange[] = [
@@ -175,22 +188,6 @@ test("WeeklyRangeOverlapError carries overlap details", () => {
   assert.ok(error.message.includes("Monday"));
   assert.equal(error.name, "WeeklyRangeOverlapError");
 });
-
-import { Keypair } from "@stellar/stellar-sdk";
-
-import {
-  filterSlotsOutsideAppointmentBuffer,
-  isSlotInsideBufferAfterLocked,
-} from "../src/services/availability.js";
-import { getPublicProviderProfile, updateProviderRules } from "../src/services/profile.js";
-import { holdSlot } from "../src/services/booking.js";
-import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
-import { updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
-import { closeDatabase, openTestDatabase, seedProviderProfile } from "./helpers.js";
-
-const FAKE_USDC_DEPS = {
-  resolveUsdcAsset: async () => ({ contractId: "CUSDCFAKE00000000000000000000000000000000000000000" }),
-};
 
 test("filterSlotsOutsideAppointmentBuffer: 30 minute buffer removes the slot that starts 15 minutes after a locked booking", () => {
   const lockedStartsAt = 1_000_000;

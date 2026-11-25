@@ -27,11 +27,10 @@ export function ProviderProfilePage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [session] = useState<Session | undefined>(() => getSession());
-  const { data: profile, isLoading, error } = usePublicProviderProfile(id, session?.token);
-
   const { data: savedData, refetch: refetchSaved } = useIsShopSaved(id, session);
   const [savingState, setSavingState] = useState<"idle" | "saving" | "unsaving">("idle");
   const [saveNotice, setSaveNotice] = useState<string | undefined>();
+
   const isSaved = savedData?.isSaved ?? false;
 
   const [showReportDialog, setShowReportDialog] = useState(false);
@@ -194,36 +193,6 @@ export function ProviderProfilePage() {
 
   if (!profile) {
     return null;
-  }
-
-  // Issue #140: signed-in shop owner sees explanation page if suspended by admin
-  if (profile.isSuspended) {
-    return (
-      <div className="page">
-        <ProviderHeader
-          displayName={profile.displayName}
-          title={profile.title}
-          location={profile.location}
-          categoryName={profile.category.name}
-          isApproved={profile.isApproved}
-          verifiedSessionCount={profile.verifiedSessionCount}
-          providerCancellationCount={profile.providerCancellationCount}
-          photoSrc={providerPhotoSrc(profile.id)}
-        />
-        <div className="banner banner--alert" style={{ marginTop: "var(--space-6)" }}>
-          <h2>This shop has been suspended by an administrator</h2>
-          {profile.suspensionReason && (
-            <p style={{ marginTop: "var(--space-2)" }}>Reason: {profile.suspensionReason}</p>
-          )}
-          <p style={{ marginTop: "var(--space-2)" }}>
-            New bookings are disabled.
-          </p>
-          <p style={{ marginTop: "var(--space-4)" }}>
-            <Link to="/me/provider">Manage your provider profile</Link>
-          </p>
-        </div>
-      </div>
-    );
   }
 
   const dayGroups = groupSlotsByDay(profile.slots);
