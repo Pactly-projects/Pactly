@@ -359,3 +359,30 @@ export async function updateProviderProfileRules(db: Db, id: string, values: Pro
     throw new TypeError(`No provider profile exists with id "${id}"`);
   }
 }
+
+/** Issue #62: sets the shop's own pause on new bookings. */
+export async function setProviderProfileBookingsPaused(db: Db, id: string, paused: boolean): Promise<void> {
+  const result = await db
+    .update(providerProfiles)
+    .set({ bookingsPaused: paused })
+    .where(eq(providerProfiles.id, id));
+  if (result.changes === 0) {
+    throw new TypeError(`No provider profile exists with id "${id}"`);
+  }
+}
+
+/** Admin suspension: records the suspension timestamp and reason on a
+ * provider profile. Throws if `id` matches no row. */
+export async function setProviderProfileSuspension(
+  db: Db,
+  id: string,
+  values: { suspendedAt: number | null; reason: string | null },
+): Promise<void> {
+  const result = await db
+    .update(providerProfiles)
+    .set({ suspendedAt: values.suspendedAt, suspensionReason: values.reason })
+    .where(eq(providerProfiles.id, id));
+  if (result.changes === 0) {
+    throw new TypeError(`No provider profile exists with id "${id}"`);
+  }
+}

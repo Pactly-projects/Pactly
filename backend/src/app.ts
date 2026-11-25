@@ -53,13 +53,16 @@ import { AccountFundingError, InvalidXdrError, NoCustodialAccountError } from ".
 import { ensureAccountReady, ensureAccountReadyInBackground, type EnsureAccountReadyDeps } from "./custodial/funding.js";
 import { signXdrForWallet } from "./custodial/keys.js";
 import { getUserByWalletAddress } from "./db/users.js";
+import { getProviderProfileById } from "./db/providerProfiles.js";
 import { getCategoryById, getCategoryBySlug, insertCategory, updateCategoryVisibility } from "./db/categories.js";
 import { RateUnavailableError, getTryRate } from "./services/rate.js";
+import { UsdcTrustlineMissingError } from "./anchor/errors.js";
 import type { Db } from "./db/client.js";
 import {
   InvalidAvailabilitySlotsError,
   InvalidProviderProfileError,
   InvalidProviderRulesError,
+  InvalidSuspensionReasonError,
   InvalidTimezoneError,
   NotAProviderError,
   ProviderNotApprovedError,
@@ -71,7 +74,10 @@ import {
   listCategoriesWithProviderCounts,
   listDiscoverProviders,
   suggestDiscoverQueries,
+  suggestProvidersForEmptySearch,
   setProviderBreaks,
+  suspendProviderProfile,
+  unsuspendProviderProfile,
   updateProviderAvailability,
   updateProviderRules,
   updateProviderTimezone,
@@ -94,6 +100,7 @@ import {
   BookingActionPendingError,
   BalanceAlreadySettledError,
   BookingDeployInFlightError,
+  DepositAlreadyLandedError,
   BookingEscrowStateError,
   BookingHoldExpiredError,
   BookingNotFoundError,
@@ -151,7 +158,7 @@ import {
 } from "./services/bookingsExport.js";
 import { config } from "./config.js";
 import { DISPUTE_OUTCOMES, type DisputeOutcome, type DisputeReason } from "./db/schema.js";
-import { getBookingById, setBookingNote, clearBookingNote } from "./db/bookings.js";
+import { getBookingById, setBookingNote, clearBookingNote, setLateNote } from "./db/bookings.js";
 import {
   AmountOutOfRangeError,
   AnchorAuthError,
@@ -166,13 +173,6 @@ import {
   QuoteStaleError,
 } from "./anchor/errors.js";
 import { fetchIndicativePrice, type Sep38FetchLike } from "./anchor/sep38.js";
-import {
-  ClosedDateBookingError,
-  InvalidClosedDateError,
-  closeDate,
-  listClosedDatesForWallet,
-  reopenDate,
-} from "./services/availability.js";
 import type { AnchorFetchLike } from "./anchor/http.js";
 import type { UsdcTrustlineDeps } from "./anchor/trustline.js";
 import {
@@ -781,7 +781,6 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
   app.get("/providers", async (c) => {
     const category = c.req.query("category");
     const filters = parseDiscoverFilters(c);
-    filters.bookableOnly = true;
     const providers = await listDiscoverProviders(db, category, filters);
     // Issue #30: a search that matches nothing names the query already (the
     // frontend echoes it) and points at the nearest category that does have
@@ -981,6 +980,37 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       }
       if (error instanceof InvalidAvailabilitySlotsError) {
         return c.json({ code: "INVALID_SLOTS", message: error.message, details: error.details }, 400);
+      }
+      throw error;
+    }
+  });
+
+  /** `PUT /me/provider/profile`: updates the copy an approved shop owns.
+   * Price, deposit rate and category are never read from the input. */
+  app.put("/me/provider/profile", requirePactlyAuth, async (c) => {
+    const body = await c.req.json().catch(() => undefined);
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const int = (value: unknown) => (typeof value === "number" ? value : Number.NaN);
+    try {
+      const profile = await updateProviderProfile(db, c.get("walletAddress"), {
+        title: text(body?.title),
+        bio: text(body?.bio),
+        languages: Array.isArray(body?.languages)
+          ? body.languages.filter((l): l is string => typeof l === "string")
+          : [],
+        sessionLengthMinutes: int(body?.sessionLengthMinutes),
+        location: text(body?.location),
+      });
+      return c.json(profile);
+    } catch (error) {
+      if (error instanceof NotAProviderError) {
+        return c.json({ code: "NOT_A_PROVIDER", message: error.message }, 404);
+      }
+      if (error instanceof ProviderNotApprovedError) {
+        return c.json({ code: "NOT_APPROVED", message: error.message }, 403);
+      }
+      if (error instanceof InvalidProviderProfileError) {
+        return c.json({ code: "INVALID_PROFILE", message: error.message, details: error.details }, 400);
       }
       throw error;
     }
@@ -2573,7 +2603,7 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
 
     const body = await c.req.json().catch(() => undefined);
     const reason = typeof body?.reason === "string" ? body.reason : "";
-    
+
     try {
       const now = Math.floor(Date.now() / 1000);
       const result = await submitShopReport(
@@ -2705,6 +2735,52 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
     }
     await setBookingNote(db, bookingId, note ?? "");
     return c.json({ success: true });
+  });
+
+  /** Issue #77: get the shop's late note on a locked booking. Visible to
+   * the booking's client and provider, never on the public profile. */
+  app.get("/bookings/:id/late-note", requirePactlyAuth, async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+    }
+    const booking = await getBookingById(db, bookingId);
+    if (!booking) {
+      return c.json({ code: "BOOKING_NOT_FOUND", message: "Booking not found." }, 404);
+    }
+    const wallet = c.get("walletAddress");
+    if (booking.clientWalletAddress !== wallet && booking.providerProfileId !== wallet) {
+      return c.json({ code: "forbidden", message: "Only the booking's client or provider can see the late note." }, 403);
+    }
+    return c.json({ lateNote: booking.lateNote ?? null });
+  });
+
+  /** Issue #77: set or clear the shop's late note on a locked booking.
+   * Only the booking's provider may set it. Note is up to 140 characters. */
+  app.post("/bookings/:id/late-note", requirePactlyAuth, async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+    }
+    const booking = await getBookingById(db, bookingId);
+    if (!booking) {
+      return c.json({ code: "BOOKING_NOT_FOUND", message: "Booking not found." }, 404);
+    }
+    // Only the booking's provider can set the late note
+    if (booking.providerProfileId !== c.get("walletAddress")) {
+      return c.json({ code: "forbidden", message: "Only the booking's provider can set the late note." }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const note = typeof body?.lateNote === "string" ? body.lateNote : null;
+    try {
+      await setLateNote(db, bookingId, note);
+      return c.json({ success: true });
+    } catch (error) {
+      if (error instanceof TypeError) {
+        return c.json({ code: "invalid_request", message: error.message }, 400);
+      }
+      throw error;
+    }
   });
 
   return app;

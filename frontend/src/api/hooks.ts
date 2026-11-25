@@ -538,6 +538,22 @@ export function markBookingArrived(bookingId: string, session: Session): Promise
 }
 
 // ---------------------------------------------------------------------------
+// Issue #77: shop late note on a locked booking.
+// ---------------------------------------------------------------------------
+
+export interface LateNoteResponse {
+  lateNote: string | null;
+}
+
+export function getLateNote(bookingId: string, session: Session): Promise<LateNoteResponse> {
+  return apiGet<LateNoteResponse>(`/bookings/${bookingId}/late-note`, session.token);
+}
+
+export function setLateNote(bookingId: string, lateNote: string | null, session: Session): Promise<{ ok: true }> {
+  return apiPost<{ ok: true }>(`/bookings/${bookingId}/late-note`, { lateNote }, session.token);
+}
+
+// ---------------------------------------------------------------------------
 // Story 2.4: local-currency deposit. Imperative like lock/fund -- each
 // step waits on a wallet signature, so these are plain async functions.
 // ---------------------------------------------------------------------------

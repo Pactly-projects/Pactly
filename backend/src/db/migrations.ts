@@ -264,6 +264,12 @@ const STATEMENTS: readonly string[] = [
     created_at INTEGER NOT NULL,
     UNIQUE (provider_profile_id, client_wallet_address, date)
   )`,
+  `CREATE TABLE IF NOT EXISTS escrow_contract_deployments (
+    booking_id TEXT NOT NULL REFERENCES bookings(id),
+    contract_id TEXT NOT NULL,
+    deployed_at INTEGER NOT NULL,
+    PRIMARY KEY (booking_id, contract_id)
+  )`,
 ];
 
 /** `true` when `table` already has a column named `column` -- `PRAGMA
@@ -481,6 +487,18 @@ export function runMigrations(sqlite: Database): void {
   }
   if (!hasColumn(sqlite, "bookings", "provider_reminder_shown_at")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN provider_reminder_shown_at INTEGER`);
+  }
+  if (!hasColumn(sqlite, "bookings", "verified_session_counted_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN verified_session_counted_at INTEGER`);
+  }
+  if (!hasColumn(sqlite, "bookings", "provider_cancellation_counted_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN provider_cancellation_counted_at INTEGER`);
+  }
+  if (!hasColumn(sqlite, "bookings", "note")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN note TEXT`);
+  }
+  if (!hasColumn(sqlite, "bookings", "late_note")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN late_note TEXT`);
   }
   // A shop can decline an unlocked hold on its own slot.
   if (!hasColumn(sqlite, "bookings", "declined_at")) {

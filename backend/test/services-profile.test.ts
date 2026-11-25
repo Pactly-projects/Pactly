@@ -15,6 +15,7 @@
 import "./testConfigEnv.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 import {
   computeDepositAmount,
@@ -34,6 +35,7 @@ import {
   validateProviderRules,
 } from "../src/services/profile.js";
 import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
+import { categories } from "../src/db/schema.js";
 import { closeDatabase, openTestDatabase, seedCategory, seedProviderProfile } from "./helpers.js";
 
 test("listMarketplaceProfiles returns only approved profiles", async () => {
@@ -423,6 +425,94 @@ test("listDiscoverProviders filters by category slug", async () => {
     const cards = await listDiscoverProviders(result.db, `consulting-${categoryA}`);
     assert.equal(cards.length, 1);
     assert.equal(cards[0]?.id, inA);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Issue #154: shops in a hidden category stay off discovery but are still
+// reachable by their own direct URL.
+// ---------------------------------------------------------------------------
+
+async function seedHiddenCategory(result: Awaited<ReturnType<typeof openTestDatabase>>, name = "Hidden Category"): Promise<string> {
+  const id = randomUUID();
+  await result.db.insert(categories).values({
+    id,
+    name,
+    slug: `hidden-${id}`,
+    visible: false,
+  });
+  return id;
+}
+
+test("listDiscoverProviders excludes shops in hidden categories", async () => {
+  const result = openTestDatabase();
+  try {
+    const visibleCategory = await seedCategory(result, "visible-cat");
+    const hiddenCategory = await seedHiddenCategory(result);
+    const visibleShop = await seedProviderProfile(result, { categoryId: visibleCategory, isApproved: true, displayName: "Visible Shop" });
+    const hiddenShop = await seedProviderProfile(result, { categoryId: hiddenCategory, isApproved: true, displayName: "Hidden Shop" });
+
+    const cards = await listDiscoverProviders(result.db, undefined, {}, 1_000_000);
+    const ids = cards.map((card) => card.id);
+    assert.ok(ids.includes(visibleShop), "visible shop should appear in discovery");
+    assert.ok(!ids.includes(hiddenShop), "hidden-category shop should not appear in discovery");
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("listDiscoverProviders search does not return shops in hidden categories", async () => {
+  const result = openTestDatabase();
+  try {
+    const visibleCategory = await seedCategory(result, "visible-cat");
+    const hiddenCategory = await seedHiddenCategory(result);
+    await seedProviderProfile(result, { categoryId: visibleCategory, isApproved: true, displayName: "Visible Hair Clinic" });
+    await seedProviderProfile(result, { categoryId: hiddenCategory, isApproved: true, displayName: "Hidden Hair Clinic" });
+
+    const cards = await listDiscoverProviders(result.db, undefined, { query: "hair" }, 1_000_000);
+    const displayNames = cards.map((card) => card.displayName);
+    assert.ok(displayNames.some((name) => name.includes("Visible")), "visible shop should match search");
+    assert.ok(!displayNames.some((name) => name.includes("Hidden")), "hidden-category shop should not match search");
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("getPublicProviderProfile still returns a shop in a hidden category (direct URL works)", async () => {
+  const result = openTestDatabase();
+  try {
+    const hiddenCategory = await seedHiddenCategory(result);
+    const id = await seedProviderProfile(result, {
+      categoryId: hiddenCategory,
+      isApproved: true,
+      displayName: "Hidden Shop",
+      priceAmount: "10000000",
+      depositRateBps: 2000,
+      cancellationWindowHours: 24,
+      sessionLengthMinutes: 50,
+    });
+    const now = 1_000_000;
+    const view = await getPublicProviderProfile(result.db, id, now);
+    assert.equal(view.displayName, "Hidden Shop");
+    assert.equal(view.category.id, hiddenCategory);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("suggestDiscoverQueries does not suggest hidden categories", async () => {
+  const result = openTestDatabase();
+  try {
+    await seedCategory(result, undefined, "visible-cat");
+    await seedHiddenCategory(result, "Hidden Cat");
+    await seedProviderProfile(result, { isApproved: true, displayName: "Visible Shop" });
+
+    const suggestions = await suggestDiscoverQueries(result.db, "visible");
+    const categoryLabels = suggestions.filter((s) => s.kind === "category").map((s) => s.label);
+    assert.ok(categoryLabels.includes("visible-cat"), "visible category should be suggested");
+    assert.ok(!categoryLabels.includes("Hidden Cat"), "hidden category should not be suggested");
   } finally {
     closeDatabase(result);
   }

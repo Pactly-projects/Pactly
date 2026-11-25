@@ -390,6 +390,68 @@ export function updateEscrowStateSync(db: DbOrTx, id: string, escrowState: Escro
   }
 }
 
+/** Issue #2: records that a verified session was counted for this booking.
+ * Sets `verified_session_counted_at` (guarded on null so a replay can never
+ * count twice) and increments the provider's `verified_session_count`.
+ * Throws if `id` matches no row. */
+export function recordVerifiedSessionCountedSync(
+  db: DbOrTx,
+  id: string,
+  providerProfileId: string,
+  now: number,
+): void {
+  const bookingResult = db
+    .update(bookings)
+    .set({ verifiedSessionCountedAt: now })
+    .where(and(eq(bookings.id, id), isNull(bookings.verifiedSessionCountedAt)))
+    .run();
+  if (bookingResult.changes === 0) {
+    throw new TypeError(`No booking exists with id "${id}"`);
+  }
+  db.update(providerProfiles)
+    .set({ verifiedSessionCount: sql`${providerProfiles.verifiedSessionCount} + 1` })
+    .where(eq(providerProfiles.id, providerProfileId))
+    .run();
+}
+
+/** Story: Mark client arrived -- sets `arrived_at` on a locked booking.
+ * Guards on `arrived_at` being null so the first timestamp wins. Throws if
+ * `id` matches no row. */
+export function markBookingArrived(db: DbOrTx, id: string, now: number): void {
+  const result = db
+    .update(bookings)
+    .set({ arrivedAt: now })
+    .where(and(eq(bookings.id, id), isNull(bookings.arrivedAt)))
+    .run();
+  if (result.changes === 0) {
+    throw new TypeError(`No booking exists with id "${id}"`);
+  }
+}
+
+/** Story: records that a provider-cancellation was counted for this booking.
+ * Sets `provider_cancellation_counted_at` (guarded on null so a replay never
+ * counts twice) and increments the provider's `provider_cancellation_count`.
+ * Throws if `id` matches no row. */
+export function recordProviderCancellationCountedSync(
+  db: DbOrTx,
+  id: string,
+  providerProfileId: string,
+  now: number,
+): void {
+  const result = db
+    .update(bookings)
+    .set({ providerCancellationCountedAt: now })
+    .where(and(eq(bookings.id, id), isNull(bookings.providerCancellationCountedAt)))
+    .run();
+  if (result.changes === 0) {
+    throw new TypeError(`No booking exists with id "${id}"`);
+  }
+  db.update(providerProfiles)
+    .set({ providerCancellationCount: sql`${providerProfiles.providerCancellationCount} + 1` })
+    .where(eq(providerProfiles.id, providerProfileId))
+    .run();
+}
+
 /** The event worker's own write path. Touches `escrowState` alone -- never
  * `balanceState`, which is a different owner's column (AD-3). */
 export async function updateEscrowState(db: Db, id: string, escrowState: EscrowState): Promise<void> {
@@ -473,6 +535,30 @@ export async function clearBookingNote(db: Db, id: string): Promise<boolean> {
     .set({ note: null })
     .where(eq(bookings.id, id));
   return result.changes > 0;
+}
+
+/** Issue #77: sets or clears the shop's late note on a locked booking.
+ * The note is up to 140 characters. An empty note clears the previous note.
+ * Throws if the booking does not exist, is not locked, or the note is too long. */
+export async function setLateNote(db: Db, id: string, note: string | null): Promise<void> {
+  const MAX_LATE_NOTE = 140;
+  if (note !== null && note.length > MAX_LATE_NOTE) {
+    throw new TypeError(`Late note must be ${MAX_LATE_NOTE} characters or fewer, got ${note.length} characters.`);
+  }
+  const booking = await getBookingById(db, id);
+  if (!booking) {
+    throw new TypeError(`No booking exists with id "${id}"`);
+  }
+  if (booking.escrowState !== "locked") {
+    throw new TypeError(`Late note can only be set on a locked booking, got escrowState "${booking.escrowState}".`);
+  }
+  const result = await db
+    .update(bookings)
+    .set({ lateNote: note ?? null })
+    .where(eq(bookings.id, id));
+  if (result.changes === 0) {
+    throw new TypeError(`No booking exists with id "${id}"`);
+  }
 }
 
 /** The backend's own write path for the balance side of AD-3. Touches

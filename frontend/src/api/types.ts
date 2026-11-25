@@ -258,6 +258,10 @@ export interface BookingView {
    * shop and the client on the booking detail page, never on the public
    * profile or discovery). */
   note: string | null;
+  /** Issue #77: the shop's late note on this booking (up to 140 chars).
+   * Visible to the booking's client and provider, never on the public
+   * profile or discovery. */
+  lateNote: string | null;
 }
 
 // ---------------------------------------------------------------------------

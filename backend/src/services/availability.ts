@@ -611,6 +611,15 @@ export class InvalidCloseDateError extends Error {
   }
 }
 
+export class InvalidBreaksError extends Error {
+  readonly details: Record<string, string>;
+  constructor(details: Record<string, string>) {
+    super("One or more break values are invalid.");
+    this.name = "InvalidBreaksError";
+    this.details = details;
+  }
+}
+
 export interface CloseProviderDateInput {
   /** Local calendar date, `YYYY-MM-DD` -- the first day closed. */
   date: string;
