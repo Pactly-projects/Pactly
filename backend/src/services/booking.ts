@@ -66,6 +66,7 @@ import {
   insertBookingHoldIfSlotFree,
   listBookingRowsForClient,
   listBookingRowsForProvider,
+  listBookingRowsForProviderInRange,
   listPotentialDoubleSales,
   listConflictingSlotBookings,
   clearUnsubmittedEscrowContractId,
@@ -2584,4 +2585,72 @@ export async function listBookingsForProvider(
   }));
   items.sort((a, b) => compareByAppointmentDate(a, b, now));
   return items;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #163: the shop's week, with returned and released deposits kept as
+// two separate totals. A booking is only ever in one of them: `refunded` is
+// money that came back to the client, `released` is money that settled to
+// the shop. Every other state (locked, disputed, an unpaid hold) is in
+// neither. Amounts are read from the booking's own stored `deposit_amount`
+// (AD-7 integer strings), summed with BigInt so no precision is lost, and
+// never recomputed from the price.
+// ---------------------------------------------------------------------------
+
+export interface DepositWeekTotalsView {
+  /** UTC epoch seconds, inclusive. */
+  weekStart: number;
+  /** UTC epoch seconds, inclusive. */
+  weekEnd: number;
+  returned: { amount: string; asset: string };
+  released: { amount: string; asset: string };
+}
+
+export interface DepositWeekTotalsRow {
+  booking: { escrowState: BookingRow["escrowState"]; depositAmount: string };
+  slotStartsAt: number | null;
+}
+
+/** Pure: sums a shop's returned and released deposits for one week. */
+export function computeDepositWeekTotals(
+  rows: readonly DepositWeekTotalsRow[],
+  weekStart: number,
+  weekEnd: number,
+): DepositWeekTotalsView {
+  let returned = 0n;
+  let released = 0n;
+  for (const { booking, slotStartsAt } of rows) {
+    if (slotStartsAt === null || slotStartsAt < weekStart || slotStartsAt > weekEnd) {
+      continue;
+    }
+    if (booking.escrowState === "refunded") {
+      returned += BigInt(booking.depositAmount);
+    } else if (booking.escrowState === "released") {
+      released += BigInt(booking.depositAmount);
+    }
+  }
+  const asset = DEPOSIT_ASSET_SYMBOL;
+  return {
+    weekStart,
+    weekEnd,
+    returned: { amount: returned.toString(), asset },
+    released: { amount: released.toString(), asset },
+  };
+}
+
+/** `GET /me/provider/deposit-week-totals`: the caller's own shop, over the
+ * seven days ending at `now`. The totals use only the bookings' own stored
+ * amounts, never a recomputed one. */
+export async function getProviderDepositWeekTotals(
+  db: Db,
+  walletAddress: string,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<DepositWeekTotalsView> {
+  const profile = await getProviderProfileByWallet(db, walletAddress);
+  if (!profile) {
+    throw new NotAProviderError();
+  }
+  const weekStart = now - 7 * 24 * 60 * 60;
+  const rows = await listBookingRowsForProviderInRange(db, profile.id, weekStart, now);
+  return computeDepositWeekTotals(rows, weekStart, now);
 }

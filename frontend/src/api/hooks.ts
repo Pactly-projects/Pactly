@@ -2,7 +2,6 @@
  * for provider/category data. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiGet, apiPost, apiPut, ApiError, apiDelete } from "./client";
 import { apiDelete, apiGet, apiPost, apiPut, ApiError } from "./client";
 import type {
   ActionResponse,
@@ -51,6 +50,8 @@ import type {
   ShopReportsListResponse,
   ClosedDatesResponse,
   ProviderProfileEditInput,
+  DepositWeekTotals,
+  VerifiedSessionsResponse,
 } from "./types";
 import type { Session } from "../wallet";
 
@@ -781,6 +782,9 @@ export function useSavedShops(session: Session | undefined) {
     enabled: Boolean(session),
     retry: false,
   });
+}
+
+// ---------------------------------------------------------------------------
 // Shop reports: clients report a shop to admins.
 // ---------------------------------------------------------------------------
 
@@ -790,4 +794,48 @@ export function submitShopReport(providerId: string, reason: string, session: Se
 
 export function getShopReportsForAdmin(session: Session): Promise<ShopReportsListResponse> {
   return apiGet<ShopReportsListResponse>("/admin/shop-reports", session.token);
+}
+
+// ---------------------------------------------------------------------------
+// Issues #163/#164: the shop's week, and the bookings behind its count.
+// ---------------------------------------------------------------------------
+
+const PROVIDER_INSIGHTS_KEY = (walletAddress: string | undefined) =>
+  ["me", "provider", "insights", walletAddress] as const;
+
+/** `GET /me/provider/deposit-week-totals` -- returned and released deposits
+ * as two separate totals for the last seven days. */
+export function useDepositWeekTotals(session: Session | undefined) {
+  return useQuery({
+    queryKey: [...PROVIDER_INSIGHTS_KEY(session?.walletAddress), "week-totals"],
+    queryFn: () => apiGet<DepositWeekTotals>("/me/provider/deposit-week-totals", session?.token),
+    enabled: Boolean(session),
+    retry: false,
+  });
+}
+
+/** `GET /me/provider/verified-sessions` -- only the caller's own released
+ * bookings, newest first. The response's `count` always equals the list. */
+export function useVerifiedSessionBookings(session: Session | undefined) {
+  return useQuery({
+    queryKey: [...PROVIDER_INSIGHTS_KEY(session?.walletAddress), "verified-sessions"],
+    queryFn: () => apiGet<VerifiedSessionsResponse>("/me/provider/verified-sessions", session?.token),
+    enabled: Boolean(session),
+    retry: false,
+  });
+}
+
+/** `PUT /me/provider/profile` -- saves only the copy the shop owns, then
+ * seeds the own-profile cache with the saved view (which clears the editor's
+ * unsaved marker). */
+export function useUpdateProviderProfile(session: Session | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ProviderProfileEditInput) =>
+      apiPut<ProviderProfile>("/me/provider/profile", input, session?.token),
+    onSuccess: (profile) => {
+      queryClient.setQueryData(OWN_PROVIDER_KEY(session?.walletAddress), profile);
+      void queryClient.invalidateQueries({ queryKey: PROVIDER_INSIGHTS_KEY(session?.walletAddress) });
+    },
+  });
 }

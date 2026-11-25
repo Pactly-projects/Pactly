@@ -106,6 +106,10 @@ export const providerProfiles = sqliteTable("provider_profiles", {
    * shop as not taking bookings and `holdSlot` refuses a new hold; existing
    * bookings, locks, releases and disputes are untouched. */
   bookingsPaused: integer("bookings_paused", { mode: "boolean" }).notNull().default(false),
+  /** Admin suspension (issue #63): hidden from discovery while set; clearing
+   * both puts the shop back without a second approval step. */
+  suspendedAt: integer("suspended_at"),
+  suspensionReason: text("suspension_reason"),
   /** Increases only on the chain's `released` event (FR20); never written
    * by hand outside the event worker's own bookkeeping. */
   verifiedSessionCount: integer("verified_session_count").notNull().default(0),
@@ -842,6 +846,8 @@ export const savedShops = sqliteTable(
   },
   (table) => [unique().on(table.clientWalletAddress, table.providerProfileId)],
 );
+
+/**
  * Shop reports: a signed-in client can report a shop listing to admins.
  * One report per client per shop per day. Does not change the shop's status.
  */
@@ -881,3 +887,33 @@ export const waitlistEntries = sqliteTable(
 );
 
 export type WaitlistEntryRow = typeof waitlistEntries.$inferSelect;
+
+/**
+ * Issue #31: one in-app event row per party per booking-level action
+ * (lock, release, dispute, resolve). A party only ever reads rows for their
+ * own wallet on bookings they belong to.
+ */
+export const escrowEvents = sqliteTable("escrow_events", {
+  id: text("id").primaryKey(),
+  bookingId: text("booking_id")
+    .notNull()
+    .references(() => bookings.id),
+  walletAddress: text("wallet_address").notNull(),
+  type: text("type", { enum: ["lock", "release", "dispute", "resolve"] }).notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+/**
+ * Issue #7: one row per escrow contract id a deploy ever returned for a
+ * booking. Write-only alongside `bookings.escrow_contract_id`; settlement
+ * always reads the booking row, so a superseded id can never move money.
+ */
+export const escrowContractDeployments = sqliteTable(
+  "escrow_contract_deployments",
+  {
+    bookingId: text("booking_id").notNull(),
+    contractId: text("contract_id").notNull(),
+    deployedAt: integer("deployed_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.bookingId, table.contractId] })],
+);

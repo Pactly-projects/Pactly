@@ -4,7 +4,7 @@
  * `../chain/event-worker.ts` -- which is what AD-1/AD-3 mean in practice:
  * nothing else may write `escrow_state`.
  */
-import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 
 import type { Db, DbOrTx } from "./client.js";
 import {
@@ -1071,4 +1071,61 @@ export async function markClientReminderShown(db: Db, bookingId: string, shownAt
  * never cleared, so a booking only shows its provider reminder once. */
 export async function markProviderReminderShown(db: Db, bookingId: string, shownAt: number): Promise<void> {
   await db.update(bookings).set({ providerReminderShownAt: shownAt }).where(eq(bookings.id, bookingId));
+}
+
+/** Issue #2 (verified sessions): marks a booking's own once-only counted
+ * stamp and bumps the shop's counter in the same transaction. Returns
+ * `false` when that booking was already counted -- the counter never moves
+ * twice for one booking. */
+export function recordVerifiedSessionCountedSync(
+  db: DbOrTx,
+  bookingId: string,
+  providerProfileId: string,
+  now: number,
+): boolean {
+  const marked = db
+    .update(bookings)
+    .set({ verifiedSessionCountedAt: now })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.verifiedSessionCountedAt)))
+    .run();
+  if (marked.changes === 0) {
+    return false;
+  }
+  db.update(providerProfiles)
+    .set({ verifiedSessionCount: sql`${providerProfiles.verifiedSessionCount} + 1` })
+    .where(eq(providerProfiles.id, providerProfileId))
+    .run();
+  return true;
+}
+
+/** Issue #2 (provider cancellations): the same once-only stamp for a
+ * dispute whose reason is `provider-cancel`. */
+export function recordProviderCancellationCountedSync(
+  db: DbOrTx,
+  bookingId: string,
+  providerProfileId: string,
+  now: number,
+): boolean {
+  const marked = db
+    .update(bookings)
+    .set({ providerCancellationCountedAt: now })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.providerCancellationCountedAt)))
+    .run();
+  if (marked.changes === 0) {
+    return false;
+  }
+  db.update(providerProfiles)
+    .set({ providerCancellationCount: sql`${providerProfiles.providerCancellationCount} + 1` })
+    .where(eq(providerProfiles.id, providerProfileId))
+    .run();
+  return true;
+}
+
+/** The shop marks when a client walks in. Once set, never cleared. */
+export async function markBookingArrived(db: Db, bookingId: string, arrivedAt: number): Promise<boolean> {
+  const result = await db
+    .update(bookings)
+    .set({ arrivedAt })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.arrivedAt)));
+  return result.changes > 0;
 }

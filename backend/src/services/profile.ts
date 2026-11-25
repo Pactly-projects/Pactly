@@ -21,7 +21,9 @@ import {
   listApprovedProviderProfiles,
   listApprovedProviderProfilesForDiscover,
   setProviderProfileBookingsPaused,
+  setProviderProfileSuspension,
   updateProviderProfileRules,
+  updateProviderProfileTimezone,
   updateProviderProfileText as persistProviderProfileText,
   type ProviderProfileRow,
 } from "../db/providerProfiles.js";
@@ -33,8 +35,21 @@ import {
 } from "../db/availabilitySlots.js";
 import { getCategoryById, getCategoryBySlug, listCategories, listVisibleCategories, type CategoryRow } from "../db/categories.js";
 import type { Db } from "../db/client.js";
-import { listEarliestOfferedSlotsByProvider, listOfferedSlots } from "./availability.js";
+import { listBookingRowsForProvider } from "../db/bookings.js";
+import { listProviderBreaks, replaceProviderBreaks } from "../db/providerBreaks.js";
+import { listReviewsForProvider, toReviewView, type ReviewView } from "../db/reviews.js";
+import {
+  assertBreaksWithinRanges,
+  filterSlotsOutsideBreaks,
+  listEarliestOfferedSlotsByProvider,
+  listOfferedSlots,
+  validateBreaks,
+  workingRangesForSlots,
+  type ProviderBreak,
+} from "./availability.js";
 import { isWithinBookingWindow } from "./bookingWindow.js";
+import { buildPublicHours, type PublicDayHours } from "./publicHours.js";
+import { isValidTimeZone } from "./timezone.js";
 
 /** Pactly's only supported asset for now (matches `services/booking.ts`'s
  * own `DEPOSIT_ASSET_SYMBOL`). Every amount this module returns is shaped
@@ -379,6 +394,8 @@ export interface ProviderProfileView {
    * view (`GET /me/provider`), omitted from the public profile, which only
    * ever sees the effect of them (those slots are simply not offered). */
   breaks?: ProviderBreak[];
+  /** Issue #3: verified reviews, newest first (the db layer's own order). */
+  reviews: ReviewView[];
 }
 
 /** The one place a `ProviderProfileRow` becomes an HTTP response -- shared
@@ -387,9 +404,8 @@ export interface ProviderProfileView {
 export function buildProviderProfileView(
   profile: ProviderProfileRow,
   category: CategoryRow,
-  slots: AvailabilitySlotRow[],
-  reviews: ReviewView[] = [],
   slots: Array<Pick<AvailabilitySlotRow, "startsAt"> | number>,
+  reviews: ReviewView[] = [],
 ): ProviderProfileView {
   let languages: string[] = [];
   try {
@@ -422,7 +438,10 @@ export function buildProviderProfileView(
     verifiedSessionCount: profile.verifiedSessionCount,
     providerCancellationCount: profile.providerCancellationCount,
     isApproved: profile.isApproved,
+    bookingsPaused: profile.bookingsPaused,
+    timezone: profile.timezone,
     slots: slots.map((slot) => (typeof slot === "number" ? slot : slot.startsAt)),
+    reviews,
   };
 }
 
@@ -479,7 +498,8 @@ export async function getPublicProviderProfile(
   visibleStarts = visibleStarts.filter((startsAt) =>
     isWithinBookingWindow(startsAt, now, profile.maxBookingDaysAhead),
   );
-  return buildProviderProfileView(profile, category, visibleStarts);
+  const reviewRows = await listReviewsForProvider(db, profile.id);
+  return buildProviderProfileView(profile, category, visibleStarts, reviewRows.map(toReviewView));
 }
 
 /** `GET /me/provider`: the caller's own profile, including while
@@ -935,6 +955,11 @@ export async function listDiscoverProviders(
 
   const allCategories = await listCategories(db);
   const categoryById = new Map(allCategories.map((row) => [row.id, row]));
+  const weeklyPatternSlotsByProvider = await listWeeklyPatternSlotsByProvider(
+    db,
+    profiles.map((profile) => profile.id),
+    now,
+  );
   const earliestSlotsByProvider = await listEarliestOfferedSlotsByProvider(
     db,
     profiles.map((profile) => ({
@@ -1183,4 +1208,45 @@ export async function suggestDiscoverQueries(db: Db, rawQuery: string): Promise<
   );
 
   return [...categorySuggestions, ...serviceSuggestions, ...providerSuggestions].slice(0, MAX_SUGGESTIONS);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #164: the bookings behind a shop's verified-session count.
+// ---------------------------------------------------------------------------
+
+export interface VerifiedSessionBookingView {
+  id: string;
+  slotStartsAt: number | null;
+  deposit: { amount: string; asset: string };
+}
+
+export interface VerifiedSessionsView {
+  /** Always exactly `bookings.length` -- the count and the list agree. */
+  count: number;
+  bookings: VerifiedSessionBookingView[];
+}
+
+/** `GET /me/provider/verified-sessions`: only the caller's own *released*
+ * bookings are in the list -- a returned (`refunded`) or disputed booking
+ * was never a completed session and is never counted. Resolving the shop
+ * from the caller's wallet is the ownership check: another shop's wallet
+ * has no profile here and gets `NotAProviderError`, never that shop's rows. */
+export async function listVerifiedSessionBookings(
+  db: Db,
+  walletAddress: string,
+): Promise<VerifiedSessionsView> {
+  const profile = await getProviderProfileByWallet(db, walletAddress);
+  if (!profile) {
+    throw new NotAProviderError();
+  }
+  const rows = await listBookingRowsForProvider(db, profile.id);
+  const bookings = rows
+    .filter(({ booking }) => booking.escrowState === "released")
+    .sort((a, b) => (b.slotStartsAt ?? 0) - (a.slotStartsAt ?? 0))
+    .map(({ booking, slotStartsAt }) => ({
+      id: booking.id,
+      slotStartsAt,
+      deposit: { amount: booking.depositAmount, asset: ASSET },
+    }));
+  return { count: bookings.length, bookings };
 }

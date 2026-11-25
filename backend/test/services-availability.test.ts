@@ -174,6 +174,8 @@ test("WeeklyRangeOverlapError carries overlap details", () => {
   assert.equal(error.overlaps.length, 1);
   assert.ok(error.message.includes("Monday"));
   assert.equal(error.name, "WeeklyRangeOverlapError");
+});
+
 import { Keypair } from "@stellar/stellar-sdk";
 
 import {

@@ -458,6 +458,7 @@ export function runMigrations(sqlite: Database): void {
   // Mark client arrived: the shop marks when a client walks in.
   if (!hasColumn(sqlite, "bookings", "arrived_at")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN arrived_at INTEGER`);
+  }
   // Optional client email for the shop's post-release mailto draft (#47).
   if (!hasColumn(sqlite, "bookings", "client_email")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN client_email TEXT`);
@@ -481,5 +482,32 @@ export function runMigrations(sqlite: Database): void {
   // another slot is offered. Default 0 keeps adjacent slots (existing rows).
   if (!hasColumn(sqlite, "provider_profiles", "buffer_minutes")) {
     sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN buffer_minutes INTEGER NOT NULL DEFAULT 0`);
+  }
+  // Issue #31: the in-app event list, one row per party per action.
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS escrow_events (
+    id TEXT PRIMARY KEY,
+    booking_id TEXT NOT NULL REFERENCES bookings(id),
+    wallet_address TEXT NOT NULL,
+    type TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+  // Issue #7: every contract id a booking ever deployed.
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS escrow_contract_deployments (
+    booking_id TEXT NOT NULL,
+    contract_id TEXT NOT NULL,
+    deployed_at INTEGER NOT NULL,
+    PRIMARY KEY (booking_id, contract_id)
+  )`);
+  // Story 3.8: the booking's private note (empty clears it).
+  if (!hasColumn(sqlite, "bookings", "note")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN note TEXT`);
+  }
+  // Issue #2: the once-only stamps behind the verified-session and
+  // provider-cancellation counters.
+  if (!hasColumn(sqlite, "bookings", "verified_session_counted_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN verified_session_counted_at INTEGER`);
+  }
+  if (!hasColumn(sqlite, "bookings", "provider_cancellation_counted_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN provider_cancellation_counted_at INTEGER`);
   }
 }

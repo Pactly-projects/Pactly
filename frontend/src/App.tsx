@@ -3,6 +3,7 @@ import { Link, Route, Routes } from "react-router";
 import { LandingPage } from "./pages/landing/LandingPage";
 import { DiscoverPage } from "./pages/discover/DiscoverPage";
 import { ProviderProfilePage } from "./pages/provider/ProviderProfilePage";
+import { ProfileEditorPage } from "./pages/panel/ProfileEditorPage";
 import { AvailabilityPage } from "./pages/panel/AvailabilityPage";
 import { BookingsPage } from "./pages/panel/BookingsPage";
 import { CashOutPage } from "./pages/panel/CashOutPage";
@@ -50,6 +51,7 @@ export function App() {
         <Route path="/proof/:id" element={<ProofPage />} />
         <Route path="/me/bookings" element={<MyBookingsPage />} />
         <Route path="/me/events" element={<EventsPage />} />
+        <Route path="/panel/profile" element={<ProfileEditorPage />} />
         <Route path="/panel/availability" element={<AvailabilityPage />} />
         <Route path="/panel/bookings" element={<BookingsPage />} />
         <Route path="/panel/cash-out" element={<CashOutPage />} />

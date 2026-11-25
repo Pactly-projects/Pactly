@@ -71,6 +71,8 @@ export interface ProviderProfile {
   slots: number[];
   /** Issue #65: present on the owner's own profile only. */
   breaks?: ProviderBreak[];
+  /** Issue #3: verified reviews, newest first. */
+  reviews: ProviderReview[];
 }
 
 export interface CategoriesResponse {
@@ -629,4 +631,106 @@ export interface ProofResponse {
   slotStartsAt: number | null;
   deposit: Money;
   contractId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Saved shops and shop reports (#73)
+// ---------------------------------------------------------------------------
+
+export interface SaveShopResponse {
+  savedShopId: string;
+}
+
+export interface UnsaveShopResponse {
+  unsaved: boolean;
+}
+
+export interface IsShopSavedResponse {
+  isSaved: boolean;
+}
+
+export interface SavedShopProvider {
+  id: string;
+  displayName: string;
+  title: string;
+  location: string;
+  categoryId: string;
+  sessionFormat: string;
+  sessionLengthMinutes: number;
+  priceAmount: string;
+  depositRateBps: number;
+  cancellationWindowHours: number;
+  isApproved: boolean;
+  verifiedSessionCount: number;
+}
+
+export interface SavedShopItem {
+  id: string;
+  provider: SavedShopProvider;
+  savedAt: number;
+}
+
+export interface SavedShopsResponse {
+  shops: SavedShopItem[];
+}
+
+export interface ShopReportSubmitResponse {
+  reportId: string;
+}
+
+export interface ShopReportListItem {
+  id: string;
+  reason: string;
+  createdAt: number;
+  reportedByWallet: string;
+  provider: {
+    id: string;
+    displayName: string;
+    walletAddress: string;
+    isApproved: boolean;
+  };
+}
+
+export interface ShopReportsListResponse {
+  reports: ShopReportListItem[];
+}
+
+// ---------------------------------------------------------------------------
+// Issues #163/#164: the shop's week and the bookings behind its count
+// ---------------------------------------------------------------------------
+
+export interface DepositWeekTotals {
+  weekStart: number;
+  weekEnd: number;
+  returned: Money;
+  released: Money;
+}
+
+export interface VerifiedSessionBooking {
+  id: string;
+  slotStartsAt: number | null;
+  deposit: Money;
+}
+
+export interface VerifiedSessionsResponse {
+  count: number;
+  bookings: VerifiedSessionBooking[];
+}
+
+/** `PUT /me/provider/profile` -- only the copy an approved shop owns. */
+export interface ProviderProfileEditInput {
+  title: string;
+  bio: string;
+  languages: string[];
+  sessionLengthMinutes: number;
+  location: string;
+}
+
+/** A verified review on a public profile (issue #3). */
+export interface ProviderReview {
+  id: string;
+  bookingId: string;
+  rating: number;
+  comment: string | null;
+  createdAt: number;
 }

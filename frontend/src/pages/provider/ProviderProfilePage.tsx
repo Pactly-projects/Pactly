@@ -1,7 +1,15 @@
 import { useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { joinWaitlist, submitShopReport, usePublicProviderProfile } from "../../api/hooks";
+import {
+  joinWaitlist,
+  saveShop,
+  submitShopReport,
+  unsaveShop,
+  useIsShopSaved,
+  usePublicProviderProfile,
+  useVerifiedSessionBookings,
+} from "../../api/hooks";
 import { ApiError } from "../../api/client";
 import { DepositPill } from "../../components/DepositPill";
 import { ProviderHeader } from "../../components/ProviderHeader";
@@ -22,6 +30,13 @@ export function ProviderProfilePage() {
   const { data: profile, isLoading, error } = usePublicProviderProfile(id);
   
   const [session] = useState<Session | undefined>(() => getSession());
+  const savedQuery = useIsShopSaved(id, session);
+  const verifiedSessionsQuery = useVerifiedSessionBookings(session);
+  const [showVerifiedSessions, setShowVerifiedSessions] = useState(false);
+  const isSaved = savedQuery.data?.isSaved ?? false;
+  const refetchSaved = savedQuery.refetch;
+  const [savingState, setSavingState] = useState<"idle" | "saving" | "unsaving">("idle");
+  const [saveNotice, setSaveNotice] = useState<string | undefined>();
   const [showReportDialog, setShowReportDialog] = useState(false);
   const [reportReason, setReportReason] = useState("");
   const [reportSubmitting, setReportSubmitting] = useState(false);
@@ -80,6 +95,9 @@ export function ProviderProfilePage() {
       }
     } finally {
       setSavingState("idle");
+    }
+  }
+
   async function handleReportSubmit(): Promise<void> {
     if (!session || !id) return;
     
@@ -200,6 +218,21 @@ const dayGroups = groupSlotsByDay(profile.slots);
         photoSrc={providerPhotoSrc(profile.id)}
       />
 
+      {/* Issue #164: the count opens into the released bookings it was
+       * built from, each linking to that booking in the panel. */}
+      {session && verifiedSessionsQuery.data && verifiedSessionsQuery.data.count > 0 && (
+        <div style={{ marginTop: "var(--space-4)" }}>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => setShowVerifiedSessions(true)}
+            style={{ fontSize: "var(--text-14)" }}
+          >
+            See the {verifiedSessionsQuery.data.count} verified sessions
+          </button>
+        </div>
+      )}
+
       {canSave && (
         <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
           <button
@@ -214,6 +247,9 @@ const dayGroups = groupSlotsByDay(profile.slots);
             {savingState === "idle" && (isSaved ? "★ Saved" : "☆ Save shop")}
           </button>
           {saveNotice && <span style={{ fontSize: "var(--text-14)", color: "var(--color-text-secondary)" }}>{saveNotice}</span>}
+        </div>
+      )}
+
       {canReport && (
         <div style={{ marginTop: "var(--space-4)" }}>
           <button
@@ -375,6 +411,30 @@ const dayGroups = groupSlotsByDay(profile.slots);
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showVerifiedSessions && verifiedSessionsQuery.data && (
+        <div className="modal-overlay" onClick={() => setShowVerifiedSessions(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ marginTop: 0 }}>Verified sessions</h2>
+            <p style={{ color: "var(--color-text-secondary)" }}>
+              The released bookings behind the count. A returned or disputed booking is never in this list.
+            </p>
+            <ul className="review-list">
+              {verifiedSessionsQuery.data.bookings.map((booking) => (
+                <li key={booking.id} className="review-list__item">
+                  <Link to={`/panel/bookings#booking-${booking.id}`}>
+                    {booking.slotStartsAt !== null ? formatSlotDay(booking.slotStartsAt) : "No appointment time"}
+                  </Link>{" · "}
+                  <TryAmount amount={booking.deposit.amount} />
+                </li>
+              ))}
+            </ul>
+            <button type="button" className="button-secondary" onClick={() => setShowVerifiedSessions(false)}>
+              Close
+            </button>
           </div>
         </div>
       )}
