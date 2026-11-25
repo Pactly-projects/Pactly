@@ -23,7 +23,7 @@ const REASON_LABEL: Record<AdminDisputeListItem["reason"], string> = {
 
 const OPENER_ROLE_LABEL: Record<"client" | "provider", string> = {
   client: "Opened by the client",
-  provider: "Opened by the provider",
+  provider: "Opened by the shop",
 };
 
 const SUGGESTED_OUTCOME_LABEL: Record<DisputeOutcome, string> = {
@@ -111,7 +111,7 @@ function DisputeRow({
       <p className="booking-card__appointment">
         {dispute.slotStartsAt !== null ? `${formatSlotDay(dispute.slotStartsAt)} · ${formatSlotTime(dispute.slotStartsAt)}` : "No appointment time on record"}
       </p>
-      <dl className="booking-card__amounts">
+<dl className="booking-card__amounts">
         <div className="booking-card__amount-row">
           <dt>Deposit</dt>
           <dd className="tabular-nums">
@@ -122,12 +122,13 @@ function DisputeRow({
           <dt>{dispute.openedByRole ? OPENER_ROLE_LABEL[dispute.openedByRole] : "Opened by"}</dt>
           <dd className="tabular-nums">{dispute.openedByWallet ? shortenStellarId(dispute.openedByWallet) : "unknown"}</dd>
         </div>
+        <div className="booking-card__amount-row">
+          <dt>Opened</dt>
+          <dd className="tabular-nums">{dispute.openedAt ? formatSlotTime(dispute.openedAt) : "unknown"}</dd>
+        </div>
       </dl>
       <p>
-        <b>{REASON_LABEL[dispute.reason]}.</b>{" "}
-        {dispute.suggestedOutcome
-          ? `Policy suggestion: ${SUGGESTED_OUTCOME_LABEL[dispute.suggestedOutcome]}.`
-          : "The booking policy has no automatic suggestion for a plain disagreement."}
+        {dispute.slotStartsAt !== null ? `${formatSlotDay(dispute.slotStartsAt)} · ${formatSlotTime(dispute.slotStartsAt)}` : "No appointment time on record"}
       </p>
       {resolvePending ? (
         <p className="booking-card__notice" aria-live="polite">
