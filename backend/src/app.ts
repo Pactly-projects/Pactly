@@ -68,9 +68,14 @@ import {
   getOwnProviderProfile,
   getPublicProviderProfile,
   setProviderBookingsPaused,
+  suspendProviderProfile,
+  unsuspendProviderProfile,
+  InvalidSuspensionReasonError,
   listCategoriesWithProviderCounts,
   listDiscoverProviders,
+  listVerifiedSessionBookings,
   suggestDiscoverQueries,
+  suggestProvidersForEmptySearch,
   setProviderBreaks,
   updateProviderAvailability,
   updateProviderRules,
@@ -88,6 +93,7 @@ import {
   decideApplication,
   getOwnProviderApplication,
   listPendingApplications,
+  previewApplicationDeposit,
   updateOwnProviderApplication,
 } from "./services/providerApplications.js";
 import {
@@ -129,6 +135,8 @@ import {
   resolveSubmitRole,
   submitBalancePayment,
   submitSignedTransaction,
+  getProviderDepositWeekTotals,
+  DepositAlreadyLandedError,
   type BuildBalancePaymentDeps,
 } from "./services/booking.js";
 import {
@@ -152,6 +160,9 @@ import {
 import { config } from "./config.js";
 import { DISPUTE_OUTCOMES, type DisputeOutcome, type DisputeReason } from "./db/schema.js";
 import { getBookingById, setBookingNote, clearBookingNote } from "./db/bookings.js";
+import { getProviderProfileById } from "./db/providerProfiles.js";
+import { getSlotById } from "./db/availabilitySlots.js";
+import { listAdminDecisionAudit } from "./db/adminDecisionAudit.js";
 import {
   AmountOutOfRangeError,
   AnchorAuthError,
@@ -164,15 +175,9 @@ import {
   AnchorUnavailableError,
   QuoteMismatchError,
   QuoteStaleError,
+  UsdcTrustlineMissingError,
 } from "./anchor/errors.js";
 import { fetchIndicativePrice, type Sep38FetchLike } from "./anchor/sep38.js";
-import {
-  ClosedDateBookingError,
-  InvalidClosedDateError,
-  closeDate,
-  listClosedDatesForWallet,
-  reopenDate,
-} from "./services/availability.js";
 import type { AnchorFetchLike } from "./anchor/http.js";
 import type { UsdcTrustlineDeps } from "./anchor/trustline.js";
 import {
@@ -402,6 +407,10 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     fetchImpl: options.localDepositDeps?.fetchImpl ?? (quoteFetchImpl as AnchorFetchLike | undefined),
   };
   const usdcTrustlineDeps = options.usdcTrustlineDeps ?? {};
+  const cashOutDeps: CashOutDeps = {
+    ...options.cashOutDeps,
+    fetchImpl: options.cashOutDeps?.fetchImpl ?? localDepositDeps.fetchImpl,
+  };
 
   // Security headers middleware -- sets three API headers (AC1) and ensures
   // no wildcard CORS origin (AC3). Runs before every route.
@@ -899,6 +908,32 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       }
       if (error instanceof InvalidProviderRulesError) {
         return c.json({ code: "INVALID_RULES", message: error.message, details: error.details }, 400);
+      }
+      throw error;
+    }
+  });
+
+  /** Issue #164: the released bookings behind the shop's verified-session
+   * count. Only the caller's own profile is ever read. */
+  app.get("/me/provider/verified-sessions", requirePactlyAuth, async (c) => {
+    try {
+      return c.json(await listVerifiedSessionBookings(db, c.get("walletAddress")));
+    } catch (error) {
+      if (error instanceof NotAProviderError) {
+        return c.json({ code: "NOT_A_PROVIDER", message: error.message }, 404);
+      }
+      throw error;
+    }
+  });
+
+  /** Issue #163: the shop's last seven days, with returned and released
+   * deposits as two separate totals. */
+  app.get("/me/provider/deposit-week-totals", requirePactlyAuth, async (c) => {
+    try {
+      return c.json(await getProviderDepositWeekTotals(db, c.get("walletAddress")));
+    } catch (error) {
+      if (error instanceof NotAProviderError) {
+        return c.json({ code: "NOT_A_PROVIDER", message: error.message }, 404);
       }
       throw error;
     }
@@ -2563,9 +2598,8 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
   // Shop reports: clients can report a shop listing to admins.
   // ---------------------------------------------------------------------
 
-  /** A signed-in client submits a report against an approved shop. Rate
-   * limited to once per day per shop. */
-  app.post("/providers/:id/report", requirePactlyAuth, async (c) => {
+  /** A signed-in client saves a shop for later. */
+  app.post("/providers/:id/save", requirePactlyAuth, async (c) => {
     const providerProfileId = c.req.param("id");
     if (!providerProfileId) {
       return c.json({ code: "invalid_request", message: "provider id is required." }, 400);

@@ -412,6 +412,30 @@ export function ProviderProfilePage() {
         </div>
       )}
 
+      {showVerifiedSessions && verifiedSessionsQuery.data && (
+        <div className="modal-overlay" onClick={() => setShowVerifiedSessions(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ marginTop: 0 }}>Verified sessions</h2>
+            <p style={{ color: "var(--color-text-secondary)" }}>
+              The released bookings behind the count. A returned or disputed booking is never in this list.
+            </p>
+            <ul className="review-list">
+              {verifiedSessionsQuery.data.bookings.map((booking) => (
+                <li key={booking.id} className="review-list__item">
+                  <Link to={`/panel/bookings#booking-${booking.id}`}>
+                    {booking.slotStartsAt !== null ? formatSlotDay(booking.slotStartsAt) : "No appointment time"}
+                  </Link>{" · "}
+                  <TryAmount amount={booking.deposit.amount} />
+                </li>
+              ))}
+            </ul>
+            <button type="button" className="button-secondary" onClick={() => setShowVerifiedSessions(false)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
       {showWaitlistDialog && waitlistDate && (
         <div className="modal-overlay" onClick={() => setShowWaitlistDialog(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>

@@ -23,6 +23,7 @@ import {
   setProviderProfileBookingsPaused,
   setProviderProfileSuspension,
   updateProviderProfileRules,
+  updateProviderProfileTimezone,
   updateProviderProfileText as persistProviderProfileText,
   updateProviderProfileTimezone,
   type ProviderProfileRow,
@@ -48,6 +49,8 @@ import {
   workingRangesForSlots,
 } from "./availability.js";
 import { isWithinBookingWindow } from "./bookingWindow.js";
+import { buildPublicHours, type PublicDayHours } from "./publicHours.js";
+import { isValidTimeZone } from "./timezone.js";
 
 /** Pactly's only supported asset for now (matches `services/booking.ts`'s
  * own `DEPOSIT_ASSET_SYMBOL`). Every amount this module returns is shaped
@@ -484,6 +487,8 @@ export interface ProviderProfileView {
    * view (`GET /me/provider`), omitted from the public profile, which only
    * ever sees the effect of them (those slots are simply not offered). */
   breaks?: ProviderBreak[];
+  /** Issue #3: verified reviews, newest first (the db layer's own order). */
+  reviews: ReviewView[];
 }
 
 /** The one place a `ProviderProfileRow` becomes an HTTP response -- shared
@@ -531,6 +536,7 @@ export function buildProviderProfileView(
     isSuspended: profile.suspendedAt !== null,
     suspensionReason: profile.suspensionReason ?? null,
     slots: slots.map((slot) => (typeof slot === "number" ? slot : slot.startsAt)),
+    reviews,
   };
 }
 
@@ -600,7 +606,8 @@ export async function getPublicProviderProfile(
   visibleStarts = visibleStarts.filter((startsAt) =>
     isWithinBookingWindow(startsAt, now, profile.maxBookingDaysAhead),
   );
-  return buildProviderProfileView(profile, category, visibleStarts);
+  const reviewRows = await listReviewsForProvider(db, profile.id);
+  return buildProviderProfileView(profile, category, visibleStarts, reviewRows.map(toReviewView));
 }
 
 /** `GET /me/provider`: the caller's own profile, including while
@@ -1214,6 +1221,11 @@ export async function listDiscoverProviders(
 
   const allCategories = await listCategories(db);
   const categoryById = new Map(allCategories.map((row) => [row.id, row]));
+  const weeklyPatternSlotsByProvider = await listWeeklyPatternSlotsByProvider(
+    db,
+    profiles.map((profile) => profile.id),
+    now,
+  );
   const earliestSlotsByProvider = await listEarliestOfferedSlotsByProvider(
     db,
     profiles.map((profile) => ({
@@ -1477,4 +1489,45 @@ export async function suggestDiscoverQueries(db: Db, rawQuery: string): Promise<
   );
 
   return [...categorySuggestions, ...serviceSuggestions, ...providerSuggestions].slice(0, MAX_SUGGESTIONS);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #164: the bookings behind a shop's verified-session count.
+// ---------------------------------------------------------------------------
+
+export interface VerifiedSessionBookingView {
+  id: string;
+  slotStartsAt: number | null;
+  deposit: { amount: string; asset: string };
+}
+
+export interface VerifiedSessionsView {
+  /** Always exactly `bookings.length` -- the count and the list agree. */
+  count: number;
+  bookings: VerifiedSessionBookingView[];
+}
+
+/** `GET /me/provider/verified-sessions`: only the caller's own *released*
+ * bookings are in the list -- a returned (`refunded`) or disputed booking
+ * was never a completed session and is never counted. Resolving the shop
+ * from the caller's wallet is the ownership check: another shop's wallet
+ * has no profile here and gets `NotAProviderError`, never that shop's rows. */
+export async function listVerifiedSessionBookings(
+  db: Db,
+  walletAddress: string,
+): Promise<VerifiedSessionsView> {
+  const profile = await getProviderProfileByWallet(db, walletAddress);
+  if (!profile) {
+    throw new NotAProviderError();
+  }
+  const rows = await listBookingRowsForProvider(db, profile.id);
+  const bookings = rows
+    .filter(({ booking }) => booking.escrowState === "released")
+    .sort((a, b) => (b.slotStartsAt ?? 0) - (a.slotStartsAt ?? 0))
+    .map(({ booking, slotStartsAt }) => ({
+      id: booking.id,
+      slotStartsAt,
+      deposit: { amount: booking.depositAmount, asset: ASSET },
+    }));
+  return { count: bookings.length, bookings };
 }

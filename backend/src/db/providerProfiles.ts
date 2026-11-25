@@ -190,6 +190,8 @@ export async function listApprovedProviderProfilesForDiscover(
       suspendedAt: providerProfiles.suspendedAt,
       suspensionReason: providerProfiles.suspensionReason,
       bookingsPaused: providerProfiles.bookingsPaused,
+      suspendedAt: providerProfiles.suspendedAt,
+      suspensionReason: providerProfiles.suspensionReason,
       timezone: providerProfiles.timezone,
       verifiedSessionCount: providerProfiles.verifiedSessionCount,
       providerCancellationCount: providerProfiles.providerCancellationCount,

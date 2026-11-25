@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { StorefrontIcon } from "@phosphor-icons/react";
 
 import { ApiError } from "../../api/client";
-import { useOwnProviderProfile, useProviderBookings } from "../../api/hooks";
+import { useDepositWeekTotals, useOwnProviderProfile, useProviderBookings } from "../../api/hooks";
 import { BookingActions } from "../../components/BookingActions";
 import { BookingCard, BALANCE_STATE_LABEL } from "../../components/BookingCard";
 import { Countdown } from "../../components/Countdown";
@@ -64,6 +64,7 @@ export function BookingsPage() {
 
   const bookingsQuery = useProviderBookings(session);
   const ownProfileQuery = useOwnProviderProfile(session);
+  const weekTotalsQuery = useDepositWeekTotals(session);
   const shopName = ownProfileQuery.data?.displayName ?? "";
 
   function handleSignOut(): void {
@@ -124,6 +125,7 @@ export function BookingsPage() {
         title="Bookings"
         actions={
           <>
+            <Link to="/panel/profile">Edit profile</Link>
             <Link to="/panel/availability">Availability &amp; rules</Link>
             <Link to="/panel/cash-out">Cash out</Link>
             <button type="button" className="button-ghost" onClick={handleSignOut}>
@@ -132,6 +134,29 @@ export function BookingsPage() {
           </>
         }
       />
+
+      {/* Issue #163: the week's two totals stay separate -- money returned to
+       * clients and money released to the shop are different outcomes, and
+       * every booking is in at most one of them. */}
+      {weekTotalsQuery.data && (
+        <section className="card" style={{ marginBottom: "var(--space-6)" }}>
+          <h2 style={{ fontSize: "var(--text-18)", marginTop: 0 }}>This week</h2>
+          <div style={{ display: "flex", gap: "var(--space-8)", flexWrap: "wrap" }}>
+            <div>
+              <p style={{ fontSize: "var(--text-14)", color: "var(--color-text-secondary)", marginBottom: "var(--space-1)" }}>
+                Returned to clients
+              </p>
+              <TryAmount amount={weekTotalsQuery.data.returned.amount} className="tabular-nums" />
+            </div>
+            <div>
+              <p style={{ fontSize: "var(--text-14)", color: "var(--color-text-secondary)", marginBottom: "var(--space-1)" }}>
+                Released to you
+              </p>
+              <TryAmount amount={weekTotalsQuery.data.released.amount} className="tabular-nums" />
+            </div>
+          </div>
+        </section>
+      )}
 
       {active.length === 0 && (
         <div className="banner" role="status">

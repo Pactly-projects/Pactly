@@ -4,7 +4,7 @@
  * `../chain/event-worker.ts` -- which is what AD-1/AD-3 mean in practice:
  * nothing else may write `escrow_state`.
  */
-import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 
 import type { Db, DbOrTx } from "./client.js";
 import {

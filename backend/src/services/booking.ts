@@ -66,6 +66,7 @@ import {
   insertBookingHoldIfSlotFree,
   listBookingRowsForClient,
   listBookingRowsForProvider,
+  listBookingRowsForProviderInRange,
   listPotentialDoubleSales,
   listConflictingSlotBookings,
   clearUnsubmittedEscrowContractId,
