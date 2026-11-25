@@ -39,6 +39,14 @@ export function EscrowProof({ contractId, txHash, serviceName, slotStartsAt }: E
           View payment record &#8599;
         </a>
       )}
+      {released &&
+        (releaseTxHash ? (
+          <a href={stellarExplorerTransactionUrl(releaseTxHash)} target="_blank" rel="noreferrer">
+            View release transaction &#8599;
+          </a>
+        ) : (
+          <span>Release transaction not recorded yet</span>
+        ))}
       {contractId && (
         <a href={trustlessWorkViewerUrl(contractId)} target="_blank" rel="noreferrer">
           View in Escrow Viewer &#8599;

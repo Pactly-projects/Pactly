@@ -80,7 +80,11 @@ export function ProofPage() {
           </div>
         </dl>
 
-        <EscrowProof contractId={data.contractId} />
+        <EscrowProof
+          contractId={data.contractId}
+          released={data.status === "released"}
+          releaseTxHash={data.releaseTxHash}
+        />
       </article>
     </div>
   );

@@ -767,6 +767,10 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
       slotStartsAt: slot?.startsAt ?? null,
       deposit: { amount: booking.depositAmount, asset: "USDC" },
       contractId: booking.escrowContractId,
+      // Issue #157: the release's own transaction (once the chain has moved
+      // the deposit) -- never the anchor cash-out id, which is a different
+      // fact entirely.
+      releaseTxHash: booking.escrowReleaseTxHash,
     });
   });
 

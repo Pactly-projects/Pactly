@@ -651,4 +651,8 @@ export interface ProofResponse {
   slotStartsAt: number | null;
   deposit: Money;
   contractId: string;
+  /** Issue #157: the transaction that moved the deposit, once the escrow
+   * has been released. `null` before release, and when a release happened
+   * without a stored hash (never the anchor cash-out id). */
+  releaseTxHash: string | null;
 }
