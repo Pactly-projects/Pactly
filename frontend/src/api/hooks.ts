@@ -691,6 +691,15 @@ export function decideProviderApplication(
   return apiPost<{ application: AdminProviderApplication }>(`/admin/applications/${id}/decide`, { outcome, reason }, session.token);
 }
 
+/** Sets the admin-only note on a pending application; an empty note clears it. */
+export function saveProviderApplicationNote(
+  id: string,
+  note: string,
+  session: Session,
+): Promise<{ application: AdminProviderApplication }> {
+  return apiPut<{ application: AdminProviderApplication }>(`/admin/applications/${id}/note`, { note }, session.token);
+}
+
 // ---------------------------------------------------------------------------
 // Anchor local-currency rate. End users never see the escrow asset.
 // ---------------------------------------------------------------------------

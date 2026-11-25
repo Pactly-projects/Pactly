@@ -458,6 +458,7 @@ export function runMigrations(sqlite: Database): void {
   // Mark client arrived: the shop marks when a client walks in.
   if (!hasColumn(sqlite, "bookings", "arrived_at")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN arrived_at INTEGER`);
+  }
   // Optional client email for the shop's post-release mailto draft (#47).
   if (!hasColumn(sqlite, "bookings", "client_email")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN client_email TEXT`);
@@ -481,5 +482,10 @@ export function runMigrations(sqlite: Database): void {
   // another slot is offered. Default 0 keeps adjacent slots (existing rows).
   if (!hasColumn(sqlite, "provider_profiles", "buffer_minutes")) {
     sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN buffer_minutes INTEGER NOT NULL DEFAULT 0`);
+  }
+  // Admin-only note on a provider application -- nullable, never shown to
+  // the applicant.
+  if (!hasColumn(sqlite, "provider_applications", "admin_note")) {
+    sqlite.exec(`ALTER TABLE provider_applications ADD COLUMN admin_note TEXT`);
   }
 }

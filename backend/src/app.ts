@@ -88,6 +88,7 @@ import {
   decideApplication,
   getOwnProviderApplication,
   listPendingApplications,
+  setApplicationAdminNote,
   updateOwnProviderApplication,
 } from "./services/providerApplications.js";
 import {
@@ -208,6 +209,7 @@ import {
   isShopSaved,
   getSavedShopsForClient,
 } from "./services/savedShops.js";
+import {
   InvalidReportReasonError,
   ReportRateLimitError,
   ShopNotFoundError,
@@ -2203,6 +2205,35 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
     }
   });
 
+  /** Admin-only note on a pending application. Body `{ note }`; an empty
+   * or null note clears it. Non-admins get `requireAdmin`'s `404 NOT_ADMIN`
+   * and never see a note. */
+  app.put("/admin/applications/:id/note", requirePactlyAuth, requireAdmin, async (c) => {
+    const id = c.req.param("id");
+    if (!id) {
+      return c.json({ code: "invalid_request", message: "application id is required." }, 400);
+    }
+    const body = await c.req.json().catch(() => undefined);
+    if (!body || typeof body !== "object" || !("note" in body)) {
+      return c.json({ code: "invalid_request", message: "note is required (use an empty string or null to clear it)." }, 400);
+    }
+    try {
+      const application = await setApplicationAdminNote(db, id, (body as { note: unknown }).note);
+      return c.json({ application });
+    } catch (error) {
+      if (error instanceof ProviderApplicationNotFoundError) {
+        return c.json({ code: "APPLICATION_NOT_FOUND", message: error.message }, 404);
+      }
+      if (error instanceof ProviderApplicationDecidedError) {
+        return c.json({ code: "APPLICATION_DECIDED", message: error.message }, 409);
+      }
+      if (error instanceof InvalidProviderApplicationError) {
+        return c.json({ code: "INVALID_NOTE", message: error.message, details: error.details }, 400);
+      }
+      throw error;
+    }
+  });
+
   // ---------------------------------------------------------------------
   // Admin suspension: an approved shop can be taken out of discovery with
   // a reason and put back again. A pending application cannot be suspended
@@ -2384,12 +2415,12 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
       }
       if (error instanceof BookingEscrowStateError) {
         return c.json({ code: "BOOKING_STATE", message: error.message }, 409);
-  // ---------------------------------------------------------------------
-  // Saved shops: a client's personal list of shops they want to book again.
-  // ---------------------------------------------------------------------
+      }
+      throw error;
+    }
+  });
 
-  /** A signed-in client saves an approved shop. Idempotent. */
-  app.post("/providers/:id/save", requirePactlyAuth, async (c) => {
+  // ---------------------------------------------------------------------
   // Story 5.8: admin category management. Any admin wallet may create a
   // category or hide/show an existing one.
   // ---------------------------------------------------------------------
@@ -2439,12 +2470,11 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
   });
 
   // ---------------------------------------------------------------------
-  // Shop reports: clients can report a shop listing to admins.
+  // Saved shops: a client's personal list of shops they want to book again.
   // ---------------------------------------------------------------------
 
-  /** A signed-in client submits a report against an approved shop. Rate
-   * limited to once per day per shop. */
-  app.post("/providers/:id/report", requirePactlyAuth, async (c) => {
+  /** A signed-in client saves an approved shop. Idempotent. */
+  app.post("/providers/:id/save", requirePactlyAuth, async (c) => {
     const providerProfileId = c.req.param("id");
     if (!providerProfileId) {
       return c.json({ code: "invalid_request", message: "provider id is required." }, 400);
@@ -2460,6 +2490,23 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
       }
       if (error instanceof ShopNotApprovedError) {
         return c.json({ code: "SHOP_NOT_APPROVED", message: error.message }, 409);
+      }
+      throw error;
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Shop reports: clients can report a shop listing to admins.
+  // ---------------------------------------------------------------------
+
+  /** A signed-in client submits a report against an approved shop. Rate
+   * limited to once per day per shop. */
+  app.post("/providers/:id/report", requirePactlyAuth, async (c) => {
+    const providerProfileId = c.req.param("id");
+    if (!providerProfileId) {
+      return c.json({ code: "invalid_request", message: "provider id is required." }, 400);
+    }
+
     const body = await c.req.json().catch(() => undefined);
     const reason = typeof body?.reason === "string" ? body.reason : "";
     
@@ -2515,6 +2562,8 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
   app.get("/me/saved-shops", requirePactlyAuth, async (c) => {
     const shops = await getSavedShopsForClient(db, c.get("walletAddress"));
     return c.json({ shops });
+  });
+
   /** Admins list all shop reports, newest first. */
   app.get("/admin/shop-reports", requirePactlyAuth, requireAdmin, async (c) => {
     const reports = await getShopReportsForAdmin(db);

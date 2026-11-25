@@ -57,6 +57,10 @@ export const providerApplications = sqliteTable("provider_applications", {
   decisionAt: integer("decision_at"),
   decisionByWallet: text("decision_by_wallet"),
   rejectionReason: text("rejection_reason"),
+  /** Admin-only working note. Never part of the applicant's view or the
+   * public profile -- the applicant-facing text is `rejectionReason`.
+   * Null when no note is set (clearing a note stores null, not ""). */
+  adminNote: text("admin_note"),
   createdAt: integer("created_at").notNull(),
 });
 
@@ -842,6 +846,8 @@ export const savedShops = sqliteTable(
   },
   (table) => [unique().on(table.clientWalletAddress, table.providerProfileId)],
 );
+
+/**
  * Shop reports: a signed-in client can report a shop listing to admins.
  * One report per client per shop per day. Does not change the shop's status.
  */
