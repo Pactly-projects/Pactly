@@ -149,6 +149,7 @@ import {
   parseExportRange,
 } from "./services/bookingsExport.js";
 import { config } from "./config.js";
+import { applyRateLimits, type RateLimitSettings } from "./http/rateLimit.js";
 import { DISPUTE_OUTCOMES, type DisputeOutcome, type DisputeReason } from "./db/schema.js";
 import { getBookingById, setBookingNote, clearBookingNote } from "./db/bookings.js";
 import {
@@ -208,6 +209,7 @@ import {
   isShopSaved,
   getSavedShopsForClient,
 } from "./services/savedShops.js";
+import {
   InvalidReportReasonError,
   ReportRateLimitError,
   ShopNotFoundError,
@@ -372,6 +374,10 @@ export interface CreateAppOptions {
    * so a test exercising the lock and provider-approval routes never
    * reaches a real Horizon endpoint. */
   usdcTrustlineDeps?: UsdcTrustlineDeps;
+  /** Overrides any part of the per-IP rate limits -- defaults come from
+   * `config` and share one process-wide store. A test passes its own
+   * `store`/`now` so counts never leak between tests. */
+  rateLimit?: Partial<RateLimitSettings>;
 }
 
 export function createApp(db: Db, options: CreateAppOptions = {}): App {
@@ -421,6 +427,16 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
   app.onError((error, c) => {
     console.error("[app] unhandled error", error);
     return c.json({ code: "internal_error", message: "Something went wrong. Please try again." }, 500);
+  });
+
+  // Per-IP limits on discovery reads and booking routes (429 + Retry-After,
+  // same `{code, message}` envelope). Registered before every route so it
+  // runs ahead of `requirePactlyAuth`. `/health` is not covered.
+  applyRateLimits(app, {
+    discovery: { max: config.rateLimitDiscoveryMax, windowSeconds: config.rateLimitWindowSeconds },
+    booking: { max: config.rateLimitBookingMax, windowSeconds: config.rateLimitWindowSeconds },
+    trustProxy: config.trustProxy,
+    ...options.rateLimit,
   });
 
   app.get("/health", (c) => c.json({ status: "ok" }));
@@ -2384,12 +2400,38 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
       }
       if (error instanceof BookingEscrowStateError) {
         return c.json({ code: "BOOKING_STATE", message: error.message }, 409);
+      }
+      throw error;
+    }
+  });
+
   // ---------------------------------------------------------------------
   // Saved shops: a client's personal list of shops they want to book again.
   // ---------------------------------------------------------------------
 
   /** A signed-in client saves an approved shop. Idempotent. */
   app.post("/providers/:id/save", requirePactlyAuth, async (c) => {
+    const providerProfileId = c.req.param("id");
+    if (!providerProfileId) {
+      return c.json({ code: "invalid_request", message: "provider id is required." }, 400);
+    }
+
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const result = await saveShop(db, c.get("walletAddress"), providerProfileId, now);
+      return c.json(result, 201);
+    } catch (error) {
+      if (error instanceof SavedShopNotFoundError) {
+        return c.json({ code: "SHOP_NOT_FOUND", message: error.message }, 404);
+      }
+      if (error instanceof ShopNotApprovedError) {
+        return c.json({ code: "SHOP_NOT_APPROVED", message: error.message }, 409);
+      }
+      throw error;
+    }
+  });
+
+  // ---------------------------------------------------------------------
   // Story 5.8: admin category management. Any admin wallet may create a
   // category or hide/show an existing one.
   // ---------------------------------------------------------------------
@@ -2449,17 +2491,6 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
     if (!providerProfileId) {
       return c.json({ code: "invalid_request", message: "provider id is required." }, 400);
     }
-
-    try {
-      const now = Math.floor(Date.now() / 1000);
-      const result = await saveShop(db, c.get("walletAddress"), providerProfileId, now);
-      return c.json(result, 201);
-    } catch (error) {
-      if (error instanceof SavedShopNotFoundError) {
-        return c.json({ code: "SHOP_NOT_FOUND", message: error.message }, 404);
-      }
-      if (error instanceof ShopNotApprovedError) {
-        return c.json({ code: "SHOP_NOT_APPROVED", message: error.message }, 409);
     const body = await c.req.json().catch(() => undefined);
     const reason = typeof body?.reason === "string" ? body.reason : "";
     
@@ -2515,6 +2546,8 @@ app.get("/bookings/:id/ics", requirePactlyAuth, async (c) => {
   app.get("/me/saved-shops", requirePactlyAuth, async (c) => {
     const shops = await getSavedShopsForClient(db, c.get("walletAddress"));
     return c.json({ shops });
+  });
+
   /** Admins list all shop reports, newest first. */
   app.get("/admin/shop-reports", requirePactlyAuth, requireAdmin, async (c) => {
     const reports = await getShopReportsForAdmin(db);
