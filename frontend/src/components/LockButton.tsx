@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 
+import type { Money } from "../api/types";
+import { lockButtonLabel } from "../lib/lockDeposit";
+
 export interface LockButtonProps {
   /** `undefined` when idle (ready to tap); the human action name while
    * waiting on a signature -- "Create your escrow", "Lock your deposit"
@@ -11,6 +14,10 @@ export interface LockButtonProps {
    * exists, so the button says that instead. Defaults to DESIGN.md's own
    * "Lock with Pactly". */
   actionLabel?: string;
+  /** Issue #178: the deposit from the server's booking response, shown on
+   * the button in USDC. While it is missing the button stays disabled, so
+   * the wallet never opens without an amount the client has seen. */
+  deposit?: Money;
   disabled?: boolean;
   onClick: () => void;
   /** Fires when the user taps "Try again" after the 60s timeout --
@@ -30,7 +37,7 @@ const RETRY_AFTER_MS = 60_000;
  * the way. Signing happens server-side now -- there is no prompt for the
  * user to find and approve.
  */
-export function LockButton({ waitingOn, actionLabel, disabled, onClick, onOpenWalletAgain }: LockButtonProps) {
+export function LockButton({ waitingOn, actionLabel, deposit, disabled, onClick, onOpenWalletAgain }: LockButtonProps) {
   const [showTryAgain, setShowTryAgain] = useState(false);
 
   useEffect(() => {
@@ -42,10 +49,19 @@ export function LockButton({ waitingOn, actionLabel, disabled, onClick, onOpenWa
     return () => clearTimeout(timer);
   }, [waitingOn]);
 
+  const label = waitingOn ? "Locking…" : lockButtonLabel(deposit);
+
   return (
     <div className="lock-button-group">
-      <button type="button" className="button-escrow" disabled={disabled || Boolean(waitingOn)} onClick={onClick} aria-live="polite" aria-label="Lock with Pactly">
-        {waitingOn ? "Locking…" : "Lock with Pactly"}
+      <button
+        type="button"
+        className="button-escrow"
+        disabled={disabled || Boolean(waitingOn) || !deposit}
+        onClick={onClick}
+        aria-live="polite"
+        aria-label={label}
+      >
+        {label}
       </button>
       {waitingOn && <p className="lock-button-group__hint">{waitingOn}</p>}
       {waitingOn && showTryAgain && (

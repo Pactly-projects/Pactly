@@ -21,7 +21,7 @@ import {
   useTryRate,
 } from "../../api/hooks";
 import { ApiError } from "../../api/client";
-import type { HoldSlotResponse, LocalDepositView, QuoteResponse } from "../../api/types";
+import type { HoldSlotResponse, LocalDepositView, Money, QuoteResponse } from "../../api/types";
 import { DepositPill } from "../../components/DepositPill";
 import { EscrowConfirmation } from "../../components/EscrowConfirmation";
 import { EscrowLane } from "../../components/EscrowLane";
@@ -31,6 +31,7 @@ import { ProviderHeader } from "../../components/ProviderHeader";
 import { Seal } from "../../components/Seal";
 import { TryAmount, useFormatTry } from "../../components/TryAmount";
 import { ESCROW_UNAVAILABLE_CODE } from "../../lib/escrowConfirmation";
+import { depositMismatchMessage, serverLockDeposit } from "../../lib/lockDeposit";
 import { formatFiatAmount } from "../../lib/money";
 import { providerPhotoSrc } from "../../lib/providerPhotos";
 import { formatSlotDay, formatSlotTime } from "../../lib/time";
@@ -83,6 +84,9 @@ interface FlowEngineState {
   /** `undefined` until a signed deploy matching this contract has actually
    * been relayed and accepted. */
   deploySubmittedAtMs?: number;
+  /** Issue #178: the deposit shown on the lock button when the client
+   * tapped it -- the figure they agreed to sign. */
+  shownDeposit?: Money;
 }
 
 const SESSION_FORMAT_LABEL: Record<string, string> = {
@@ -183,6 +187,12 @@ export function BookingPage() {
   const booking = useBooking(hold?.bookingId, session, {
     enabled: Boolean(hold?.bookingId && session),
   });
+  // Issue #178: the lock button's amount is the server's own booking
+  // response, never the profile's advertised deposit. Kept in a ref too, so
+  // the async lock flow always compares against the latest server figure.
+  const serverDeposit = serverLockDeposit(booking.data, hold, booking.isError);
+  const serverDepositRef = useRef<Money | undefined>(serverDeposit);
+  serverDepositRef.current = serverDeposit;
 
   const prefersReducedMotion = useMemo(
     () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
@@ -605,6 +615,11 @@ export function BookingPage() {
   async function runLockFlow(options: { rebuild?: boolean } = {}): Promise<void> {
     if (!hold || !session) return;
     if (inFlightRef.current) return;
+    // Issue #178: the wallet never opens without a server amount on the
+    // button, and that figure is what the fund step checks before signing.
+    const shownDeposit = serverDepositRef.current;
+    if (!shownDeposit) return;
+    engineRef.current.shownDeposit = shownDeposit;
     inFlightRef.current = true;
     setFlowNotice(undefined);
     setFlowFatalError(undefined);
@@ -696,6 +711,15 @@ export function BookingPage() {
 
   async function runFundStep(): Promise<void> {
     if (!hold || !session || !engineRef.current.deploySubmittedAtMs) return;
+    // Issue #178: the server builds the fund transaction from the booking's
+    // deposit. Only go on while that is still the figure the client saw on
+    // the button; otherwise nothing is built or signed.
+    const mismatch = depositMismatchMessage(engineRef.current.shownDeposit, serverDepositRef.current);
+    if (mismatch) {
+      setPhase("deployed");
+      setFlowNotice(mismatch);
+      return;
+    }
     setPhase("building-fund");
     // Funding moves the deposit too -- a fresh assertion, never the
     // morning's session alone.
@@ -1191,6 +1215,7 @@ export function BookingPage() {
                       <LockButton
                         waitingOn={waitingOn}
                         actionLabel={actionLabel}
+                        deposit={serverDeposit}
                         disabled={lockInFlight}
                         onClick={() => void runLockFlow()}
                         onOpenWalletAgain={() => void retryPendingSignature()}
@@ -1239,6 +1264,7 @@ export function BookingPage() {
                 <LockButton
                   waitingOn={waitingOn}
                   actionLabel={actionLabel}
+                  deposit={serverDeposit}
                   disabled={lockInFlight}
                   onClick={() => void runLockFlow()}
                   onOpenWalletAgain={() => void retryPendingSignature()}
