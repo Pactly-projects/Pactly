@@ -23,6 +23,7 @@ import {
   setProviderProfileBookingsPaused,
   setProviderProfileSuspension,
   updateProviderProfileRules,
+  updateProviderProfileTimezone,
   updateProviderProfileText as persistProviderProfileText,
   updateProviderProfileTimezone,
   type ProviderProfileRow,
@@ -46,6 +47,11 @@ import {
   listOfferedSlots,
   validateBreaks,
   workingRangesForSlots,
+  type ProviderBreak,
+} from "./availability.js";
+import { listProviderBreaks, replaceProviderBreaks } from "../db/providerBreaks.js";
+import { buildPublicHours, type PublicDayHours } from "./publicHours.js";
+import { isValidTimeZone } from "./timezone.js";
 } from "./availability.js";
 import { isWithinBookingWindow } from "./bookingWindow.js";
 
@@ -526,6 +532,8 @@ export function buildProviderProfileView(
     verifiedSessionCount: profile.verifiedSessionCount,
     providerCancellationCount: profile.providerCancellationCount,
     isApproved: profile.isApproved,
+    bookingsPaused: profile.bookingsPaused,
+    timezone: profile.timezone,
     bookingsPaused: Boolean(profile.bookingsPaused),
     timezone: profile.timezone,
     isSuspended: profile.suspendedAt !== null,
@@ -927,6 +935,10 @@ export interface ProviderProfileTextInput {
   sessionLengthMinutes: number;
   /** "How to find the shop" -- free text, no geocoding. */
   location: string;
+  /** Issue #128: notice text shown on public profile and booking page */
+  noticeText: string;
+  /** Issue #128: epoch seconds after which the notice is no longer shown */
+  noticeEndDate: number;
 }
 
 const MIN_PROFILE_SESSION_LENGTH_MINUTES = 15;
@@ -942,6 +954,12 @@ export function validateProviderProfileText(input: ProviderProfileTextInput): Re
   }
   if (typeof input.bio !== "string" || input.bio.trim() === "") {
     details.bio = "Description is required.";
+  }
+  if (typeof input.noticeText !== "string") {
+    details.noticeText = "Notice text must be a string.";
+  }
+  if (typeof input.noticeEndDate !== "number" || isNaN(input.noticeEndDate)) {
+    details.noticeEndDate = "Notice end date must be a number.";
   }
   if (
     !Array.isArray(input.languages) ||
@@ -994,6 +1012,8 @@ export async function updateProviderProfile(
     languages: JSON.stringify([...new Set(input.languages.map((language) => language.trim()))]),
     sessionLengthMinutes: input.sessionLengthMinutes,
     location: input.location.trim(),
+    noticeText: input.noticeText.trim(),
+    noticeEndDate: input.noticeEndDate,
   });
   return getOwnProviderProfile(db, walletAddress, now);
 }
@@ -1214,6 +1234,11 @@ export async function listDiscoverProviders(
 
   const allCategories = await listCategories(db);
   const categoryById = new Map(allCategories.map((row) => [row.id, row]));
+  const weeklyPatternSlotsByProvider = await listWeeklyPatternSlotsByProvider(
+    db,
+    profiles.map((profile) => profile.id),
+    now,
+  );
   const earliestSlotsByProvider = await listEarliestOfferedSlotsByProvider(
     db,
     profiles.map((profile) => ({

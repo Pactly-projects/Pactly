@@ -182,6 +182,8 @@ export function AvailabilityPage() {
   const [bufferMinutesInput, setBufferMinutesInput] = useState("");
   const [maxBookingDaysInput, setMaxBookingDaysInput] = useState("");
   const [selectedSlots, setSelectedSlots] = useState<Set<number>>(new Set());
+  const [editNoticeText, setEditNoticeText] = useState("");
+  const [editNoticeEndDate, setEditNoticeEndDate] = useState("");
   const [closeDate, setCloseDate] = useState("");
   const [closeEndDate, setCloseEndDate] = useState("");
   const [closeBusy, setCloseBusy] = useState(false);
@@ -216,6 +218,8 @@ export function AvailabilityPage() {
       setEditLanguages((profileQuery.data.languages ?? []).join(", "));
       setEditSessionLength(String(profileQuery.data.sessionLengthMinutes));
       setEditLocation(profileQuery.data.location);
+      setEditNoticeText(profileQuery.data.noticeText ?? "");
+      setEditNoticeEndDate(String(profileQuery.data.noticeEndDate ?? ""));
     }
   }, [profileQuery.data]);
 
@@ -565,6 +569,21 @@ export function AvailabilityPage() {
           <div className="field">
             <label htmlFor="profile-location">How to find the shop</label>
             <input id="profile-location" value={editLocation} onChange={(event) => setEditLocation(event.target.value)} />
+          </div>
+          <div className="field">
+            <label htmlFor="profile-notice-text">Notice text</label>
+            <textarea id="profile-notice-text" rows={2} value={editNoticeText} onChange={(event) => setEditNoticeText(event.target.value)} />
+            <small className="field__error">Leave blank to clear the notice</small>
+          </div>
+          <div className="field">
+            <label htmlFor="profile-notice-end-date">Notice end date (epoch seconds)</label>
+            <input
+              id="profile-notice-end-date"
+              inputMode="numeric"
+              value={editNoticeEndDate}
+              onChange={(event) => setEditNoticeEndDate(event.target.value)}
+            />
+            <small className="field__error">Leave blank to clear the notice after saving</small>
           </div>
           <button type="submit" className="button-primary" disabled={updateProfile.isPending}>
             {updateProfile.isPending ? "Saving…" : "Save profile"}

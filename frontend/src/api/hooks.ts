@@ -291,8 +291,8 @@ export function rescheduleBooking(bookingId: string, slotStartsAt: number, sessi
   return apiPost<BookingView>(`/bookings/${bookingId}/reschedule`, { slotStartsAt }, session.token);
 }
 
-export function lockDeposit(bookingId: string, session: Session, rebuild = false): Promise<LockResponse> {
-  return apiPost<LockResponse>(`/bookings/${bookingId}/lock`, rebuild ? { rebuild: true } : {}, session.token);
+export function lockDeposit(bookingId: string, session: Session, rebuild = false, anchorQuoteId?: number): Promise<LockResponse> {
+  return apiPost<LockResponse>(`/bookings/${bookingId}/lock`, { rebuild, anchorQuoteId }, session.token);
 }
 
 export function fundDeposit(bookingId: string, session: Session, assertionToken?: string): Promise<FundResponse> {

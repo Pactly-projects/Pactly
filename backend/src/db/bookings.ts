@@ -4,7 +4,7 @@
  * `../chain/event-worker.ts` -- which is what AD-1/AD-3 mean in practice:
  * nothing else may write `escrow_state`.
  */
-import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 
 import type { Db, DbOrTx } from "./client.js";
 import {
@@ -573,6 +573,9 @@ export async function updateEscrowContractId(
    * deploy XDR, stored so `submitSignedTransaction` can match a signed
    * envelope's own computed hash against it before ever relaying it. */
   txHash?: string,
+  /** Issue #7: the SEP-38 quote id to persist on the booking. Null if not
+   * provided (keeps existing behavior for pre-7 bookings). */
+  anchorQuoteId?: string,
 ): Promise<void> {
   const result = await db
     .update(bookings)
@@ -580,6 +583,10 @@ export async function updateEscrowContractId(
       escrowContractId: contractId,
       escrowDeployXdr: unsignedXdr ?? null,
       escrowDeployTxHash: txHash ?? null,
+      // Issue #7: persist the SEP-38 quote id at lock time so the booking
+      // retains its reference even if the quote later ages out or the deposit
+      // fails.
+      anchorQuoteId: anchorQuoteId ?? null,
       // Issue #6: the deploy is no longer in flight -- this booking now has
       // a persisted contractId, so the claim taken for it is released in
       // this same atomic write (every later lock call returns from the
@@ -1089,7 +1096,19 @@ export async function markClientReminderShown(db: Db, bookingId: string, shownAt
 export async function markProviderReminderShown(db: Db, bookingId: string, shownAt: number): Promise<void> {
   await db.update(bookings).set({ providerReminderShownAt: shownAt }).where(eq(bookings.id, bookingId));
 }
-
+/**
+ * Marks a booking as arrived -- the provider's record that the client showed
+ * up. Succeeds (returns `true`) only once: the first call for a booking with
+ * no `arrivedAt` yet set. A second call returns `false` (keeps the first
+ * timestamp), and a call for a nonexistent booking also returns `false`.
+ */
+export async function markBookingArrived(db: Db, bookingId: string, arrivedAt: number): Promise<boolean> {
+  const result = await db
+    .update(bookings)
+    .set({ arrivedAt })
+    .where(and(eq(bookings.id, bookingId), isNull(bookings.arrivedAt)));
+  return result.changes > 0;
+}
 /** Increments `provider_profiles.verified_session_count` for `bookingId` at
  * most once, and returns whether it did. The `WHERE ... IS NULL` on the
  * marker is what enforces "the same booking cannot increase the count
@@ -1114,7 +1133,9 @@ export function recordVerifiedSessionCountedSync(
     .run();
   return true;
 }
-
+/** The provider-cancellation sibling of
+ * {@link recordVerifiedSessionCountedSync}: increments
+ * `provider_profiles.provider_cancellation_count` at most once per booking. */
 /**
  * Marks a booking as arrived -- the provider's record that the client showed
  * up. Succeeds (returns `true`) only once: the first call for a booking with

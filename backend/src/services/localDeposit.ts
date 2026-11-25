@@ -13,6 +13,18 @@ import {
   QuoteStaleError,
 } from "../anchor/errors.js";
 import { type AnchorFetchLike } from "../anchor/http.js";
+
+/** Compares two anchor amounts as 2-decimal money: `"1250.0"` and
+ * `"1250.00"` are the same price, `"1250.01"` is not. The anchor is free to
+ * trim trailing zeros, so a plain string compare would refuse a perfectly
+ * unchanged price. */
+function toTwoDecimalPlaces(amount: string): string {
+  const parsed = Number(amount);
+  if (!Number.isFinite(parsed)) {
+    return amount.trim();
+  }
+  return parsed.toFixed(2);
+}
 import {
   fetchSep6DepositLimits,
   fetchSep6Transaction,
@@ -30,6 +42,7 @@ import {
   type IndicativePrice,
 } from "../anchor/sep38.js";
 import { resolveUsdcAsset } from "../anchor/usdc.js";
+import { accountHasUsdcTrustline } from "../anchor/trustline.js";
 import {
   extendHoldExpiresAt,
   setAnchorDeposit,

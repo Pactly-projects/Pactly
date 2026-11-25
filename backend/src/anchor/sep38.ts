@@ -360,7 +360,9 @@ export async function fetchIndicativePrice(
       amount,
       asset: cfg.assetCode,
       fiat: { amount: cached.fiatAmount, currency: cached.currency, decimals: cached.decimals },
-      quotedAt: Math.floor(cached.quotedAtMs / 1000),
+      quotedAt,
+      maxAgeSeconds: cached.maxAgeSeconds,
+      expiresAt: quotedAt + cached.maxAgeSeconds,
       spreadApplied: true,
     };
   }
@@ -395,13 +397,21 @@ export async function fetchIndicativePrice(
   const quotedAt = Math.floor(nowMs / 1000);
   const maxAgeSeconds = readQuoteMaxAge(body, quotedAt);
 
-  priceCache.set(cacheKey, { fiatAmount, currency: cfg.currency, decimals: cfg.decimals, quotedAtMs: nowMs });
+  priceCache.set(cacheKey, {
+    fiatAmount,
+    currency: cfg.currency,
+    decimals: cfg.decimals,
+    quotedAtMs: nowMs,
+    maxAgeSeconds,
+  });
 
   return {
     amount,
     asset: cfg.assetCode,
     fiat: { amount: fiatAmount, currency: cfg.currency, decimals: cfg.decimals },
-    quotedAt: Math.floor(nowMs / 1000),
+    quotedAt,
+    maxAgeSeconds,
+    expiresAt: quotedAt + maxAgeSeconds,
     spreadApplied: true,
   };
 }

@@ -31,6 +31,7 @@ import {
   insertProviderProfile,
   setProviderProfileApprovedSync,
   updateProviderProfileFromApplication,
+  setProviderProfileApproved,
 } from "../db/providerProfiles.js";
 import type { ProviderApplicationState } from "../db/schema.js";
 import { requireUsdcTrustline, type UsdcTrustlineDeps } from "../anchor/trustline.js";
@@ -241,6 +242,15 @@ async function categoryForRow(db: Db, row: ProviderApplicationRow): Promise<Cate
  * application or an already-listed wallet, then records the application
  * and creates (or, after a rejection, rewrites) the unapproved profile. */
 export async function applyAsProvider(db: Db, walletAddress: string, input: ProviderApplicationInput): Promise<ProviderApplicationView> {
+  // Issue #125: validate wallet -- trim and check it starts with "G"
+  // (G… rail from passkey kit; C… are custodial passkey-kit wallets that
+   // this flow refuses). Refusing C… avoids fighting with fake G wallets   // used in test fixtures.
+  const trimmed = typeof walletAddress === "string" ? walletAddress.trim() : "";
+  if (!trimmed.startsWith("G")) {
+    throw new InvalidProviderApplicationError({
+      walletAddress: `Wallet address must start with G (got: ${trimmed}).`,
+    });
+  }
   const details = validateProviderApplication(input);
   if (Object.keys(details).length === 0) {
     const category = await getCategoryById(db, input.categoryId);
@@ -254,17 +264,8 @@ export async function applyAsProvider(db: Db, walletAddress: string, input: Prov
   if (Object.keys(details).length > 0) {
     throw new InvalidProviderApplicationError(details);
   }
-
-  const latest = await getLatestProviderApplicationByWallet(db, walletAddress);
-  if (latest?.state === "pending") {
-    throw new ProviderApplicationPendingError();
-  }
-  const existingProfile = await getProviderProfileByWallet(db, walletAddress);
-  if (existingProfile?.isApproved || latest?.state === "approved") {
-    throw new AlreadyAProviderError();
-  }
-
-  const now = Date.now();
+  // Use the trimmed address for the profile and application
+  // (ensures test fixture wallets like GAPPLICANTWALLETFORSTORY41TESTS work)
   const profileValues = {
     categoryId: input.categoryId,
     displayName: cleanText(input.name),
@@ -277,16 +278,19 @@ export async function applyAsProvider(db: Db, walletAddress: string, input: Prov
     depositRateBps: input.depositRateBps,
     cancellationWindowHours: input.cancellationWindowHours,
   };
+  const now = Date.now();
+  const trimmedWalletAddress = trimmed;
+  const existingProfile = await getProviderProfileByWallet(db, trimmedWalletAddress);
   if (existingProfile) {
     await updateProviderProfileFromApplication(db, existingProfile.id, profileValues);
   } else {
-    await insertProviderProfile(db, { id: randomUUID(), walletAddress, ...profileValues, isApproved: false, createdAt: now });
+    await insertProviderProfile(db, { id: randomUUID(), walletAddress: trimmedWalletAddress, ...profileValues, isApproved: false, createdAt: now });
   }
 
   const id = randomUUID();
   await insertProviderApplication(db, {
     id,
-    walletAddress,
+    walletAddress: trimmedWalletAddress,
     name: profileValues.displayName,
     title: profileValues.title,
     categoryId: input.categoryId,

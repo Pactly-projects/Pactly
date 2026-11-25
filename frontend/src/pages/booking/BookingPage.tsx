@@ -616,7 +616,8 @@ export function BookingPage() {
     try {
       if (!engineRef.current.deploySubmittedAtMs) {
         setPhase("building-deploy");
-        const lockResult = await lockDeposit(hold.bookingId, session, options.rebuild ?? false);
+        const anchorQuoteId = depositQuote?.quote.quotedAt;
+        const lockResult = await lockDeposit(hold.bookingId, session, options.rebuild ?? false, anchorQuoteId);
         engineRef.current.contractId = lockResult.contractId;
         // Nothing is signed until the client has seen which escrow it is.
         setEscrowConfirmation(
@@ -1049,13 +1050,13 @@ export function BookingPage() {
             <div className="booking-summary__row">
               <span>Price</span>
               <strong>
-                <TryAmount amount={hold?.price.amount ?? profile.price.amount} />
+                <TryAmount amount={hold?.price.amount ?? profile.price.amount} currency={depositQuote?.quote.fiat.currency} />
               </strong>
             </div>
             <div className="booking-summary__row">
               <span>Deposit, locked now</span>
               <strong>
-                <TryAmount amount={depositAmount} />
+                <TryAmount amount={depositAmount} currency={depositQuote?.quote.fiat.currency} />
               </strong>
             </div>
             {depositQuote && (
@@ -1076,7 +1077,7 @@ export function BookingPage() {
               <div className="booking-summary__row">
                 <span>Balance, due before the session</span>
                 <strong>
-                  <TryAmount amount={balanceAmount} />
+                  <TryAmount amount={balanceAmount} currency={depositQuote?.quote.fiat.currency} />
                 </strong>
               </div>
             )}

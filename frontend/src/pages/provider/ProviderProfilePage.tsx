@@ -288,6 +288,14 @@ export function ProviderProfilePage() {
             <p>{profile.bio}</p>
           </div>
         )}
+        {profile.noticeText && (
+          <div style={{ marginBottom: "var(--space-5)" }}>
+            <p style={{ fontSize: "var(--text-14)", color: "var(--color-text-primary)" }}>{profile.noticeText}</p>
+            {profile.noticeEndDate && (
+              <p style={{ fontSize: "var(--text-12)", color: "var(--color-text-secondary)" }}>Expires: {new Date(profile.noticeEndDate * 1000).toLocaleDateString()}</p>
+            )}
+          </div>
+        )}
         {profile.languages.length > 0 && (
           <p style={{ marginBottom: "var(--space-5)" }}>Languages: {profile.languages.join(", ")}</p>
         )}

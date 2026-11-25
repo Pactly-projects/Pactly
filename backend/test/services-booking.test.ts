@@ -19,7 +19,14 @@ import { Keypair, StrKey } from "@stellar/stellar-sdk";
 
 import { BookingDeployInFlightError, BookingEscrowStateError, BookingNotFoundError, DepositAlreadyLandedError, fundDeposit, getBookingView, lockDeposit, resolveBookingDispute, setBalanceState } from "../src/services/booking.js";
 import { getEscrowDisputeResolution } from "../src/db/escrowDisputeResolutions.js";
-import { getBookingById, recordDeploySubmission, updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
+import {
+  getBookingById,
+  recordDeploySubmission,
+  setEscrowFundTxHash,
+  updateEscrowContractId,
+  updateEscrowStateSync,
+} from "../src/db/bookings.js";
+import { listContractDeployments } from "../src/db/escrowContractDeployments.js";
 import { bookings, availabilitySlots } from "../src/db/schema.js";
 import { insertEscrowProcessedEventIfNew } from "../src/db/escrowProcessedEvents.js";
 import type { Db } from "../src/db/client.js";
@@ -501,7 +508,7 @@ test("fundDeposit refuses when the slot has already started (SlotInPastError)", 
       ...unreachableEscrowAdapter(),
       fund: async () => ({ unsignedXdr: "unsigned-fund-xdr", txHash: "fund-tx-hash" }),
     };
-    const built = await fundDeposit(result.db, bookingId, adapter, { now: past + 1 });
+    const built = await fundDeposit(result.db, bookingId, adapter, { now: now + 1 });
 
     assert.equal(built.txHash, "fund-tx-hash");
   } finally {
@@ -554,6 +561,7 @@ test("Issue #5: resuming a deployed-but-unfunded booking rebuilds only the fund,
 test("Issue #5: a fund transaction the network already reports successful is never asked for again", async () => {
   const result = openTestDatabase();
   try {
+    const now = Math.floor(Date.now() / 1000);
     const bookingId = await seedBooking(result);
     const contractId = fakeContractId();
     await updateEscrowContractId(result.db, bookingId, contractId, "unsigned-xdr", "deploy-tx-hash");

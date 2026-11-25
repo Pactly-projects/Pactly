@@ -108,6 +108,18 @@ export const providerProfiles = sqliteTable("provider_profiles", {
    * shop as not taking bookings and `holdSlot` refuses a new hold; existing
    * bookings, locks, releases and disputes are untouched. */
   bookingsPaused: integer("bookings_paused", { mode: "boolean" }).notNull().default(false),
+  /** An admin suspension (not the shop's own pause). Non-null while the
+   * shop is suspended: it is hidden from discovery and search and cannot
+   * take new bookings. Clearing both puts the shop back into discovery
+   * with no re-approval. Existing bookings are never touched. */
+  suspendedAt: integer("suspended_at"),
+  suspensionReason: text("suspension_reason"),
+  /** Issue #128: notice text shown on public profile and booking page
+   * until `noticeEndDate`. Non-null means the notice is active. */
+  noticeText: text("notice_text").notNull().default(''),
+  /** Issue #128: end date (epoch seconds) after which the notice is no longer
+   * shown. Past this date the notice is cleared automatically. */
+  noticeEndDate: integer("notice_end_date"),
   /** Issue #145: optional/intake answers stored as JSON. Each entry has
    * `questionId`, `questionText`, `isOptional`, and `answer`. Null answer
    * means unanswered (only allowed when `isOptional` is true). */
@@ -179,7 +191,7 @@ export const providerClosedDates = sqliteTable(
  * until the event worker processes the booking's first event -- the row is
  * written before the chain call (AD-13's hold), so it exists before any
  * event about it can arrive. */
-export const ESCROW_STATES = ["locked", "released", "refunded"] as const;
+export const ESCROW_STATES = ["locked", "disputed", "released", "refunded"] as const;
 export type EscrowState = (typeof ESCROW_STATES)[number];
 
 export const BALANCE_STATES = ["unpaid", "paid_platform", "paid_cash"] as const;
@@ -251,6 +263,13 @@ export const bookings = sqliteTable("bookings", {
    * earlier deploy may already have landed and been funded.
    */
   escrowContractId: text("escrow_contract_id"),
+  /**
+   * Issue #7: the SEP-38 quote id that was used to generate the local-currency
+   * deposit amount. Persisted at lock time so the booking retains its reference
+   * even if the quote later ages out or the deposit fails. The first id is kept
+   * on re-lock; persists even if deposit later fails.
+   */
+  anchorQuoteId: text("anchor_quote_id"),
   /**
    * Issue #6: the in-flight first-deploy claim's own token. `lockDeposit`
    * takes this claim with one conditioned `UPDATE` *before* it calls the
@@ -766,7 +785,7 @@ export const providerBreaks = sqliteTable(
   (table) => [unique().on(table.providerProfileId, table.weekday, table.startMinute)],
 );
 
-export const WEBAUTHN_CHALLENGE_KINDS = ["register", "login"] as const;
+export const WEBAUTHN_CHALLENGE_KINDS = ["register", "login", "assert"] as const;
 export type WebauthnChallengeKind = (typeof WEBAUTHN_CHALLENGE_KINDS)[number];
 
 /** A pending passkey ceremony's challenge: issued by the `/options` step,
@@ -890,6 +909,43 @@ export const waitlistEntries = sqliteTable(
     createdAt: integer("created_at").notNull(),
   },
   (table) => [unique().on(table.providerProfileId, table.clientWalletAddress, table.date)],
+);
+
+/**
+ * Issue #31: one in-app event row per party per booking-level action
+ * (lock, release, dispute, resolve). Each party has a page of their own
+ * events, newest first, linking to the booking.
+ */
+export const escrowEvents = sqliteTable("escrow_events", {
+  id: text("id").primaryKey(),
+  bookingId: text("booking_id")
+    .notNull()
+    .references(() => bookings.id),
+  /** Which party this event row is visible to -- the client's wallet or the
+   * provider's wallet on this booking. */
+  walletAddress: text("wallet_address").notNull(),
+  /** `lock` | `release` | `dispute` | `resolve`. */
+  type: text("type", { enum: ["lock", "release", "dispute", "resolve"] }).notNull(),
+  /** UTC epoch seconds -- the event's own wall-clock when it was recorded. */
+  createdAt: integer("created_at").notNull(),
+});
+
+/**
+ * Issue #7: one row per escrow contract id a deploy ever returned for a
+ * booking, so a superseded id can be seen but never used to move money.
+ */
+export const escrowContractDeployments = sqliteTable(
+  "escrow_contract_deployments",
+  {
+    bookingId: text("booking_id").notNull(),
+    /** The Trustless Work escrow's own identity (a Soroban `C...`) exactly
+     * as `deploy` returned it. */
+    contractId: text("contract_id").notNull(),
+    /** UTC epoch seconds -- when this contract id was persisted for the
+     * booking, the same clock `bookings.deploy_submitted_at` uses. */
+    deployedAt: integer("deployed_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.bookingId, table.contractId] })],
 );
 
 export type WaitlistEntryRow = typeof waitlistEntries.$inferSelect;

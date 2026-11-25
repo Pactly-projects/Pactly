@@ -97,6 +97,7 @@ const STATEMENTS: readonly string[] = [
     escrow_deploy_tx_hash TEXT,
     escrow_fund_tx_hash TEXT,
     deploy_submitted_at INTEGER,
+    anchor_quote_id TEXT,
     note TEXT,
     verified_session_counted_at INTEGER,
     provider_cancellation_counted_at INTEGER,
@@ -350,6 +351,19 @@ export function runMigrations(sqlite: Database): void {
   if (!hasColumn(sqlite, "bookings", "escrow_deploy_tx_hash")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN escrow_deploy_tx_hash TEXT`);
   }
+  // Issue #7: the SEP-38 quote id persisted at lock time so the booking
+  // retains its reference even if the quote later ages out or the deposit
+  // fails. Nullable since pre-existing bookings have no quote id.
+  if (!hasColumn(sqlite, "bookings", "anchor_quote_id")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN anchor_quote_id TEXT`);
+  }
+  // Issue #128: notice text + end date on provider profile
+  if (!hasColumn(sqlite, "provider_profiles", "notice_text")) {
+    sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN notice_text TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!hasColumn(sqlite, "provider_profiles", "notice_end_date")) {
+    sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN notice_end_date INTEGER`);
+  }
   if (!hasColumn(sqlite, "bookings", "escrow_fund_tx_hash")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN escrow_fund_tx_hash TEXT`);
   }
@@ -495,6 +509,25 @@ export function runMigrations(sqlite: Database): void {
   if (!hasColumn(sqlite, "provider_profiles", "buffer_minutes")) {
     sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN buffer_minutes INTEGER NOT NULL DEFAULT 0`);
   }
+  // Issue #31: one event row per party per booking-level action.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS escrow_events (
+      id TEXT PRIMARY KEY,
+      booking_id TEXT NOT NULL REFERENCES bookings(id),
+      wallet_address TEXT NOT NULL,
+      type TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  // Issue #7: every escrow contract id a deploy ever returned for a booking.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS escrow_contract_deployments (
+      booking_id TEXT NOT NULL,
+      contract_id TEXT NOT NULL,
+      deployed_at INTEGER NOT NULL,
+      PRIMARY KEY (booking_id, contract_id)
+    )
+  `);
   if (!hasColumn(sqlite, "bookings", "verified_session_counted_at")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN verified_session_counted_at INTEGER`);
   }

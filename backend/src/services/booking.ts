@@ -99,6 +99,13 @@ import {
   listLockedBookingStarts,
   listOfferedSlotsInRange,
 } from "./availability.js";
+import {
+  getEscrowDisputeResolution,
+  recordEscrowDisputeResolution,
+  recordEscrowDisputeResolutionSync,
+} from "../db/escrowDisputeResolutions.js";
+import { insertAdminDecisionAuditSync } from "../db/adminDecisionAudit.js";
+import { recordEscrowEventForBothParties } from "../db/escrowEvents.js";
 import { recordEscrowDisputeResolution } from "../db/escrowDisputeResolutions.js";
 import { listContractDeployments, recordContractDeployment } from "../db/escrowContractDeployments.js";
 import { escrowDisputeOpenings, bookings } from "../db/schema.js";
@@ -670,6 +677,20 @@ export class DisputeAlreadyResolvedError extends Error {
   }
 }
 
+/** Refuses {@link SlotInPastError} when the booking's slot has already
+ * started (or is starting right now) according to the server clock.
+ * This check applies to `lockDeposit` and `fundDeposit` -- a hold may have
+ * been created when the slot was in the future, but locking/funding must
+ * be refused once the slot start time has passed. */
+async function requireSlotNotInPast(db: Db, booking: BookingRow, now: number): Promise<void> {
+  if (booking.slotId !== null) {
+    const slot = await getSlotById(db, booking.slotId);
+    if (slot && slot.startsAt <= now) {
+      throw new SlotInPastError(slot.startsAt, now);
+    }
+  }
+}
+
 async function requireBooking(db: Db, bookingId: string): Promise<BookingRow> {
   const booking = await getBookingById(db, bookingId);
   if (!booking) {
@@ -755,6 +776,8 @@ export interface LockDepositDeps {
    * `resolveUsdcAsset` seam does; a test injects answers and never opens a
    * socket. */
   usdcTrustline?: UsdcTrustlineDeps;
+  /** Issue #7: the SEP-38 quote id to persist on the booking at lock time. */
+  anchorQuoteId?: string;
 }
 
 /**
@@ -833,6 +856,12 @@ export async function lockDeposit(
   requireHoldNotDeclined(booking);
   requireHoldNotExpired(booking, now);
   await requireSlotNotInPast(db, booking, now);
+
+  // Issue #7: Refuse lock without a SEP-38 quote id so the booking retains
+  // its currency reference.
+  if (!booking.anchorQuoteId) {
+    throw new BookingEscrowStateError(`Booking "${bookingId}" has no anchor quote id; lockDeposit requires a quote id.`);
+  }
 
   // Issue #48: Validate that the anchor transfer credited enough to cover
   // the deposit. A missing transfer (no anchorDepositId) is refused, as is
@@ -931,7 +960,7 @@ export async function lockDeposit(
     throw error;
   }
   try {
-    await updateEscrowContractId(db, bookingId, deployResult.contractId, deployResult.unsignedXdr, deployResult.txHash);
+    await updateEscrowContractId(db, bookingId, deployResult.contractId, deployResult.unsignedXdr, deployResult.txHash, deps.anchorQuoteId);
   } catch (error) {
     await releaseEscrowLock(db, bookingId, claimToken);
     if (error instanceof TypeError) {
@@ -2109,6 +2138,10 @@ export interface BookingView {
   /** Issue #35: true when this read triggered showing a reminder (appointment
    * day-before notice). False when already shown or conditions not met. */
   reminderShown: boolean;
+  /** Issue #44: the wallet that opened the open dispute, so the withdrawal
+   * button only shows to the party who may use it. `null` when no dispute is
+   * open (or when nothing about its opener was recorded). */
+  disputeOpenedByWallet: string | null;
 }
 
 /** `GET /bookings/:id`'s own response shape: the booking's amounts (each
@@ -2475,6 +2508,10 @@ export interface BookingListItemBase {
   /** UTC epoch seconds -- when the provider marked the client as arrived,
    * `null` until marked. */
   arrivedAt: number | null;
+  /** UTC epoch seconds -- when the shop declined this hold, `null`
+   * otherwise, so the client's card can say "declined" rather than showing
+   * the same countdown as a hold nobody answered. */
+  declinedAt: number | null;
 }
 
 export interface ClientBookingListItem extends BookingListItemBase {
@@ -2542,6 +2579,7 @@ function toBookingListItemBase(
     holdReleasedReason: booking.holdReleaseReason,
     isExpiredHold: isExpiredHoldRow(booking, now),
     arrivedAt: booking.arrivedAt,
+    declinedAt: booking.declinedAt,
   };
 }
 

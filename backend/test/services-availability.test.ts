@@ -176,6 +176,8 @@ test("WeeklyRangeOverlapError carries overlap details", () => {
   assert.equal(error.name, "WeeklyRangeOverlapError");
 });
 
+// Appointment buffer: slots that start inside the buffer after a locked
+// booking are not offered.
 import { Keypair } from "@stellar/stellar-sdk";
 
 import {
