@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useTryRate } from "../api/hooks";
 import { currencyToUsdcSmallestUnit, usdcToCurrency } from "../lib/money";
 import { formatSessionFormat } from "../lib/sessionFormat";
+import { DISCOVER_SORT_OPTIONS, type DiscoverSort } from "../lib/discoverFilters";
 import type { DiscoverAvailability } from "../api/types";
 
 /** Same shape the backend's own `parseDiscoverFilters` requires (AD-7's
@@ -149,11 +150,45 @@ function DepositCapField({
   );
 }
 
-/** The four Discover v2 filter sections this story keeps (When / Session
- * type / Service price / Deposit -- the mockup's Neighbourhood and Where
- * sections are dropped, per the spec's own Code Map). Shared between the
- * desktop rail and the mobile bottom sheet so the two surfaces can never
- * drift into different controls. */
+/** The neighbourhood text filter, kept as a local draft so a half-typed
+ * place never writes the URL -- and so never refetches -- on every
+ * keystroke. Committed on blur or Enter, exactly like the price fields. */
+function NeighborhoodField({
+  neighborhood,
+  onNeighborhoodChange,
+}: Pick<FilterFieldsProps, "neighborhood" | "onNeighborhoodChange">) {
+  const [text, setText] = useState(neighborhood);
+
+  useEffect(() => {
+    setText(neighborhood);
+  }, [neighborhood]);
+
+  function commit() {
+    onNeighborhoodChange(text);
+  }
+
+  return (
+    <label className="filter-field__neighborhood-input">
+      <span>Neighbourhood</span>
+      <input
+        type="text"
+        value={text}
+        placeholder="e.g. Kadıköy"
+        onChange={(event) => setText(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commit();
+        }}
+      />
+    </label>
+  );
+}
+
+/** The five Discover v2 filter sections this story keeps (Neighbourhood /
+ * When / Session type / Service price / Deposit) plus the sort order, which
+ * issue #156 added to the URL alongside them. Shared between the desktop
+ * rail and the mobile bottom sheet so the two surfaces can never drift into
+ * different controls. */
 export function FilterFields({
   formats,
   onToggleFormat,
@@ -226,7 +261,20 @@ export function FilterFields({
 
       <div className="filter-field">
         <h3 className="filter-field__heading">Deposit</h3>
-        <DepositCapField maxDepositBps={maxDepositBps} onMaxDepositBpsChange={onMaxDepositBpsChange} />
+                  <DepositCapField maxDepositBps={maxDepositBps} onMaxDepositBpsChange={onMaxDepositBpsChange} />
+      </div>
+
+      <div className="filter-field">
+        <h3 className="filter-field__heading">Sort</h3>
+        <label className="filter-field__sort">
+          <select value={sort} onChange={(event) => onSortChange(event.target.value as DiscoverSort)}>
+            {DISCOVER_SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
     </div>
   );

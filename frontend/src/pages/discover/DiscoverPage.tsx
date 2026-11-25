@@ -12,18 +12,15 @@ import { FilterSheet } from "../../components/FilterSheet";
 import { ProviderCard } from "../../components/ProviderCard";
 import { ProviderCardSkeleton } from "../../components/ProviderCardSkeleton";
 import { SearchBox } from "../../components/SearchBox";
+import {
+  DEFAULT_DISCOVER_SORT,
+  applyDiscoverView,
+  readDiscoverFilters,
+  type DiscoverSort,
+} from "../../lib/discoverFilters";
 
 /** AC5: six skeleton cards match the real card layout on first load. */
 const SKELETON_COUNT = 6;
-
-const AVAILABILITY_VALUES = new Set<DiscoverAvailability>(["24h", "week"]);
-
-/** Same shape the backend's own `parseDiscoverFilters` requires (AD-7's
- * smallest-unit integer strings, `"0"` allowed) -- a URL value that fails
- * this must never reach `BigInt(...)` anywhere downstream. */
-const NON_NEGATIVE_INTEGER_STRING = /^(0|[1-9]\d*)$/;
-const MIN_DEPOSIT_RATE_BPS_FILTER = 1;
-const MAX_DEPOSIT_RATE_BPS_FILTER = 10000;
 
 /**
  * `/discover` -- the Discover page, in the "Editorial Warmth" format
@@ -166,6 +163,7 @@ export function DiscoverPage() {
   function clearFilter(key: string): void {
     updateParams((params) => {
       if (key === "format") params.delete("format");
+      if (key === "neighborhood") params.delete("neighborhood");
       if (key === "price") {
         params.delete("minPrice");
         params.delete("maxPrice");
@@ -206,13 +204,21 @@ export function DiscoverPage() {
 
   const selectedCategoryName = categories.find((category) => category.slug === selectedSlug)?.name;
   const providers = providersQuery.data?.providers ?? [];
-  const [featured, ...rest] = providers;
+  // Issue #156: the neighbourhood and the sort order act on the cards the
+  // backend already returned (soonest first), so the URL stays the only
+  // source of truth for both.
+  const visibleProviders = useMemo(
+    () => applyDiscoverView(providers, neighborhood, sort),
+    [providers, neighborhood, sort],
+  );
+  const [featured, ...rest] = visibleProviders;
   const showProvidersSkeleton = waitingForCategoryResolution || providersQuery.isLoading;
 
-  const activeFilterCount = [formats.length > 0, minPrice !== undefined || maxPrice !== undefined, maxDepositBps !== undefined, availability !== undefined].filter(Boolean).length;
+  const activeFilterCount = [formats.length > 0, neighborhood.length > 0, minPrice !== undefined || maxPrice !== undefined, maxDepositBps !== undefined, availability !== undefined].filter(Boolean).length;
 
   const filterChips = [
     formats.length > 0 ? { key: "format", label: "session format" } : undefined,
+    neighborhood.length > 0 ? { key: "neighborhood", label: "neighbourhood" } : undefined,
     minPrice !== undefined || maxPrice !== undefined ? { key: "price", label: "price range" } : undefined,
     maxDepositBps !== undefined ? { key: "deposit", label: "deposit cap" } : undefined,
   ].filter((chip): chip is { key: string; label: string } => chip !== undefined);
@@ -252,7 +258,7 @@ export function DiscoverPage() {
   const resultsQualifier = q.trim() ? q.trim() : selectedCategoryName;
   const resultsHeading = showProvidersSkeleton
     ? "Places"
-    : `${providers.length} ${providers.length === 1 ? "place" : "places"}${resultsQualifier ? ` · ${resultsQualifier}` : ""}`;
+    : `${visibleProviders.length} ${visibleProviders.length === 1 ? "place" : "places"}${resultsQualifier ? ` · ${resultsQualifier}` : ""}`;
 
   return (
     <div className="editorial-page">
@@ -306,6 +312,11 @@ export function DiscoverPage() {
           <FunnelSimpleIcon size={16} weight="bold" aria-hidden="true" />
           Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
         </button>
+        {activeFilterCount > 0 || q || selectedSlug || sort !== DEFAULT_DISCOVER_SORT ? (
+          <button type="button" className="button-ghost" onClick={clearAllFilters}>
+            Clear all
+          </button>
+        ) : null}
       </div>
 
       {categoriesQuery.isError ? (
@@ -346,7 +357,7 @@ export function DiscoverPage() {
                     Try again
                   </button>
                 </div>
-              ) : providers.length === 0 ? (
+              ) : visibleProviders.length === 0 ? (
                 <EmptyResults
                   query={q}
                   filterChips={filterChips}
