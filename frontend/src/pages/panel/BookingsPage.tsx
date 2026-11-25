@@ -269,6 +269,7 @@ export function BookingsPage() {
                 balanceState={booking.balanceState}
                 cancelDeadline={booking.cancelDeadline}
                 serverTime={booking.serverTime}
+                arrivedAt={booking.arrivedAt}
                 contractId={booking.contractId}
                 balancePaymentTxHash={booking.balancePaymentTxHash}
                 anchorTransactionId={booking.anchorTransactionId}
@@ -306,6 +307,7 @@ export function BookingsPage() {
                 balanceState={booking.balanceState}
                 cancelDeadline={booking.cancelDeadline}
                 serverTime={booking.serverTime}
+                arrivedAt={booking.arrivedAt}
                 contractId={booking.contractId}
                 balancePaymentTxHash={booking.balancePaymentTxHash}
                 anchorTransactionId={booking.anchorTransactionId}

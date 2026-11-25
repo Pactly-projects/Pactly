@@ -3,10 +3,18 @@ import { Link } from "react-router";
 import { CalendarCheckIcon } from "@phosphor-icons/react";
 
 import { useMyBookings } from "../../api/hooks";
+import type { ClientBookingListItem, ProviderReview } from "../../api/types";
 import { BookingCard } from "../../components/BookingCard";
 import { PageMasthead } from "../../components/PageMasthead";
 import { SignInPanel } from "../../components/SignInPanel";
 import { getSession, signOut, type Session } from "../../wallet";
+
+/** `GET /me/bookings` also carries these fields for settled bookings; the
+ * shared list type predates them, so widen only this page's local view. */
+type ClientBookingWithDetails = ClientBookingListItem & {
+  holdReleasedReason?: "shop-closed-date" | null;
+  review?: ProviderReview;
+};
 
 /**
  * `/me/bookings` -- "My bookings" (Task list): every booking the signed-in
@@ -60,7 +68,7 @@ export function MyBookingsPage() {
     );
   }
 
-  const bookings = bookingsQuery.data?.bookings ?? [];
+  const bookings = (bookingsQuery.data?.bookings ?? []) as ClientBookingWithDetails[];
   // "An expired, never-funded hold is listed under 'Expired holds'
   // (collapsed), never as a booking" -- the spec's own "Always" rule.
   const active = bookings.filter((booking) => !booking.isExpiredHold);
@@ -107,6 +115,8 @@ export function MyBookingsPage() {
               pendingAction={booking.pendingAction}
               balanceState={booking.balanceState}
               cancelDeadline={booking.cancelDeadline}
+              serverTime={booking.serverTime}
+              arrivedAt={booking.arrivedAt}
               holdReleasedReason={booking.holdReleasedReason}
               contractId={booking.contractId}
               balancePaymentTxHash={booking.balancePaymentTxHash}
@@ -114,6 +124,8 @@ export function MyBookingsPage() {
               session={session}
               onActionSubmitted={() => bookingsQuery.refetch()}
               onUnauthorized={handleSignOut}
+              review={booking.review}
+              onReviewSubmitted={() => bookingsQuery.refetch()}
               declinedAt={booking.declinedAt}
               continueHref={
                 booking.escrowState === null && booking.declinedAt === null && booking.slotStartsAt !== null
@@ -146,6 +158,7 @@ export function MyBookingsPage() {
                 balanceState={booking.balanceState}
                 cancelDeadline={booking.cancelDeadline}
                 serverTime={booking.serverTime}
+                arrivedAt={booking.arrivedAt}
                 contractId={booking.contractId}
                 balancePaymentTxHash={booking.balancePaymentTxHash}
                 anchorTransactionId={booking.anchorTransactionId}

@@ -119,6 +119,13 @@ export const providerProfiles = sqliteTable("provider_profiles", {
    * A client cancelling, a refund, or a dispute with any other reason never
    * touches it. */
   providerCancellationCount: integer("provider_cancellation_count").notNull().default(0),
+  /**
+   * Admin suspension of a shop: `suspendedAt` hides it from discovery and
+   * booking until cleared; `suspensionReason` is the latest reason an admin
+   * gave. Once cleared, the shop returns without a second approval.
+   */
+  suspendedAt: integer("suspended_at"),
+  suspensionReason: text("suspension_reason"),
   createdAt: integer("created_at").notNull(),
 });
 

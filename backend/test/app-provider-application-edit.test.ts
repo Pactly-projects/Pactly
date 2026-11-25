@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { createApp } from "../src/app.js";
 import { issuePactlyJwt } from "../src/auth/challenge.js";
 import { NON_RESOLVER_ADMIN_WALLET } from "./testConfigEnvAdmin.js";
-import { closeDatabase, openTestDatabase, seedCategory } from "./helpers.js";
+import { closeDatabase, openTestDatabase, seedCategory, USDC_READY_WALLET_DEPS } from "./helpers.js";
 
 const APPLICANT = "GAPPLICANTWALLETFORSUSPENSIONTST1";
 const OTHER_WALLET = "GOTHERWALLETFORAPPLICATIONEDITS01";
@@ -54,7 +54,7 @@ test("a pending application can be edited; the admin queue and panel see the new
   const result = openTestDatabase();
   try {
     const categoryId = await seedCategory(result, "cat-edit", "Barbershop");
-    const app = createApp(result.db);
+    const app = createApp(result.db, { usdcTrustlineDeps: USDC_READY_WALLET_DEPS });
     const applicant = await bearer(APPLICANT);
     const admin = await bearer(NON_RESOLVER_ADMIN_WALLET);
 

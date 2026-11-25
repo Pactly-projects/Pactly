@@ -29,6 +29,7 @@ import {
   isQuoteStale,
   type IndicativePrice,
 } from "../anchor/sep38.js";
+import { accountHasUsdcTrustline } from "../anchor/trustline.js";
 import { resolveUsdcAsset } from "../anchor/usdc.js";
 import {
   extendHoldExpiresAt,
@@ -191,7 +192,7 @@ async function confirmedQuoteAmount(
   if (typeof quote.fiat?.amount !== "string" || quote.fiat.amount.trim() === "") {
     throw new QuoteStaleError("The confirmed price has no amount. Refresh it before continuing.");
   }
-  const confirmedAmount = toTwoDecimalPlaces(quote.fiat.amount);
+  const confirmedAmount = toConfiguredDecimalPlaces(quote.fiat.amount, 2);
 
   // Re-fetch rather than reading the short-lived price cache: the amount
   // submitted to the anchor must be checked against its current price, not
@@ -211,7 +212,7 @@ async function confirmedQuoteAmount(
       `Could not refresh the confirmed price before starting the deposit: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const serverAmount = toTwoDecimalPlaces(serverQuote.fiat.amount);
+  const serverAmount = toConfiguredDecimalPlaces(serverQuote.fiat.amount, 2);
   if (confirmedAmount !== serverAmount) {
     throw new QuoteMismatchError(
       "The confirmed price no longer matches the anchor's current price. Refresh it before continuing.",

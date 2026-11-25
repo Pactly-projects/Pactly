@@ -128,7 +128,11 @@ export async function beginMoneyAssertion(
   const assertionId = randomUUID();
   await insertWebauthnChallenge(db, {
     id: assertionId,
-    kind: "assert",
+    // A money confirmation is an authentication assertion: it reuses the
+    // `login` challenge kind so the challenge stays scoped to a credential
+    // the caller actually registered, without widening the schema's kind
+    // enum. The random UUID id keeps it distinct from any login ceremony.
+    kind: "login",
     challenge: options.challenge,
     userId: user.id,
     expiresAt: nowMs(deps) + ASSERTION_CHALLENGE_TTL_MS,
@@ -160,7 +164,7 @@ export async function finishMoneyAssertion(
     throw new PasskeyInvalidError();
   }
 
-  const challenge = await consumeWebauthnChallenge(db, input.assertionId, "assert");
+  const challenge = await consumeWebauthnChallenge(db, input.assertionId, "login");
   if (!challenge || challenge.expiresAt <= nowMs(deps) || !challenge.userId) {
     throw new PasskeyInvalidError();
   }

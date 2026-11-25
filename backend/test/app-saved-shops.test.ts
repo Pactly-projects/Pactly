@@ -7,464 +7,271 @@
  * not see the list. Saving twice is a no-op. A shop the client has a booking
  * with is not saved automatically.
  */
-import { describe, expect, test } from "bun:test";
-import { testDb, testKp, testKp2, testKp3, testWallet, testWallet2, testWallet3 } from "./test-helpers.js";
-import { createApp } from "../src/app.js";
+import "./testConfigEnv.js";
+import { randomUUID } from "node:crypto";
+import { describe, test } from "node:test";
+import assert from "node:assert/strict";
+import { eq } from "drizzle-orm";
+
 import { issuePactlyJwt } from "../src/auth/challenge.js";
-import { insertProviderProfile } from "../src/db/providerProfiles.js";
-import { insertCategory } from "../src/db/categories.js";
+import { createApp } from "../src/app.js";
+import { providerProfiles, savedShops } from "../src/db/schema.js";
+import { closeDatabase, openTestDatabase, seedCategory, seedProviderProfile, type OpenDatabaseResult } from "./helpers.js";
+
+const PROVIDER_WALLET = "GPROVIDERWALLETFORSAVEDSHOPS001";
+const CLIENT_WALLET = "GCLIENTWALLETFORSAVEDSHOPS001";
+const OTHER_WALLET = "GCLIENTWALLETFORSAVEDSHOPS002";
+const THIRD_WALLET = "GCLIENTWALLETFORSAVEDSHOPS003";
+
+async function seedShop(
+  result: OpenDatabaseResult,
+  walletAddress: string,
+  displayName: string,
+  isApproved = true,
+): Promise<string> {
+  const categoryId = await seedCategory(result, randomUUID(), "Test Category");
+  return seedProviderProfile(result, {
+    walletAddress,
+    categoryId,
+    displayName,
+    title: "Test Service",
+    location: "Test City",
+    sessionFormat: "in_person",
+    sessionLengthMinutes: 60,
+    priceAmount: "10000000",
+    depositRateBps: 1000,
+    cancellationWindowHours: 24,
+    isApproved,
+  });
+}
+
+async function save(app: ReturnType<typeof createApp>, id: string, token: string) {
+  return app.request(`/providers/${id}/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+  });
+}
 
 describe("Saved shops", () => {
   test("Save shop successfully", async () => {
-    const db = testDb();
-    const app = createApp(db);
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const providerId = await seedShop(result, PROVIDER_WALLET, "Test Shop");
+      const clientToken = await issuePactlyJwt(CLIENT_WALLET);
 
-    // Set up: create an approved provider
-    const categoryId = await insertCategory(db, { name: "Test Category", slug: "test-category" });
-    const providerId = await insertProviderProfile(db, {
-      walletAddress: testWallet,
-      displayName: "Test Shop",
-      title: "Test Service",
-      categoryId,
-      location: "Test City",
-      serviceDescription: "Test description",
-      sessionFormat: "in_person",
-      sessionLengthMinutes: 60,
-      priceAmount: "10000000",
-      depositRateBps: 1000,
-      cancellationWindowHours: 24,
-      isApproved: true,
-      verifiedSessionCount: 0,
-    });
+      const saveRes = await save(app, providerId, clientToken);
+      assert.equal(saveRes.status, 201);
+      const saveData = await saveRes.json();
+      assert.equal(typeof saveData.savedShopId, "string");
 
-    // Client saves the shop
-    const clientToken = await issuePactlyJwt(testWallet2);
-    const saveRes = await app.request(`/providers/${providerId}/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${clientToken}`,
-      },
-    });
+      const checkRes = await app.request(`/providers/${providerId}/saved`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${clientToken}` },
+      });
+      assert.equal(checkRes.status, 200);
+      assert.equal((await checkRes.json()).isSaved, true);
 
-    expect(saveRes.status).toBe(201);
-    const saveData = await saveRes.json();
-    expect(saveData).toHaveProperty("savedShopId");
-    expect(typeof saveData.savedShopId).toBe("string");
-
-    // Check if shop is saved
-    const checkRes = await app.request(`/providers/${providerId}/saved`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${clientToken}` },
-    });
-
-    expect(checkRes.status).toBe(200);
-    const checkData = await checkRes.json();
-    expect(checkData.isSaved).toBe(true);
-
-    // List saved shops
-    const listRes = await app.request("/me/saved-shops", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${clientToken}` },
-    });
-
-    expect(listRes.status).toBe(200);
-    const listData = await listRes.json();
-    expect(listData.shops).toBeArray();
-    expect(listData.shops.length).toBe(1);
-    expect(listData.shops[0].provider.id).toBe(providerId);
-    expect(listData.shops[0].provider.displayName).toBe("Test Shop");
+      const listRes = await app.request("/me/saved-shops", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${clientToken}` },
+      });
+      assert.equal(listRes.status, 200);
+      const listData = await listRes.json();
+      assert.ok(Array.isArray(listData.shops));
+      assert.equal(listData.shops.length, 1);
+      assert.equal(listData.shops[0].provider.id, providerId);
+      assert.equal(listData.shops[0].provider.displayName, "Test Shop");
+    } finally {
+      closeDatabase(result);
+    }
   });
 
   test("Saving twice is a no-op", async () => {
-    const db = testDb();
-    const app = createApp(db);
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const providerId = await seedShop(result, PROVIDER_WALLET, "Test Shop");
+      const clientToken = await issuePactlyJwt(CLIENT_WALLET);
 
-    // Set up: create an approved provider
-    const categoryId = await insertCategory(db, { name: "Test Category", slug: "test-category" });
-    const providerId = await insertProviderProfile(db, {
-      walletAddress: testWallet,
-      displayName: "Test Shop",
-      title: "Test Service",
-      categoryId,
-      location: "Test City",
-      serviceDescription: "Test description",
-      sessionFormat: "in_person",
-      sessionLengthMinutes: 60,
-      priceAmount: "10000000",
-      depositRateBps: 1000,
-      cancellationWindowHours: 24,
-      isApproved: true,
-      verifiedSessionCount: 0,
-    });
+      assert.equal((await save(app, providerId, clientToken)).status, 201);
+      assert.equal((await save(app, providerId, clientToken)).status, 201);
 
-    const clientToken = await issuePactlyJwt(testWallet2);
-
-    // Save first time
-    const firstRes = await app.request(`/providers/${providerId}/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${clientToken}`,
-      },
-    });
-    expect(firstRes.status).toBe(201);
-
-    // Save second time - should be idempotent
-    const secondRes = await app.request(`/providers/${providerId}/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${clientToken}`,
-      },
-    });
-    expect(secondRes.status).toBe(201);
-
-    // Should still have only one saved shop
-    const listRes = await app.request("/me/saved-shops", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${clientToken}` },
-    });
-
-    const listData = await listRes.json();
-    expect(listData.shops.length).toBe(1);
+      const listRes = await app.request("/me/saved-shops", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${clientToken}` },
+      });
+      assert.equal((await listRes.json()).shops.length, 1);
+    } finally {
+      closeDatabase(result);
+    }
   });
 
   test("Unsave shop successfully", async () => {
-    const db = testDb();
-    const app = createApp(db);
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const providerId = await seedShop(result, PROVIDER_WALLET, "Test Shop");
+      const clientToken = await issuePactlyJwt(CLIENT_WALLET);
+      await save(app, providerId, clientToken);
 
-    // Set up: create an approved provider
-    const categoryId = await insertCategory(db, { name: "Test Category", slug: "test-category" });
-    const providerId = await insertProviderProfile(db, {
-      walletAddress: testWallet,
-      displayName: "Test Shop",
-      title: "Test Service",
-      categoryId,
-      location: "Test City",
-      serviceDescription: "Test description",
-      sessionFormat: "in_person",
-      sessionLengthMinutes: 60,
-      priceAmount: "10000000",
-      depositRateBps: 1000,
-      cancellationWindowHours: 24,
-      isApproved: true,
-      verifiedSessionCount: 0,
-    });
+      const unsaveRes = await app.request(`/providers/${providerId}/save`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${clientToken}` },
+      });
+      assert.equal(unsaveRes.status, 200);
+      assert.equal((await unsaveRes.json()).unsaved, true);
 
-    const clientToken = await issuePactlyJwt(testWallet2);
+      const checkRes = await app.request(`/providers/${providerId}/saved`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${clientToken}` },
+      });
+      assert.equal((await checkRes.json()).isSaved, false);
 
-    // Save the shop
-    await app.request(`/providers/${providerId}/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${clientToken}`,
-      },
-    });
-
-    // Unsave the shop
-    const unsaveRes = await app.request(`/providers/${providerId}/save`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${clientToken}` },
-    });
-
-    expect(unsaveRes.status).toBe(200);
-    const unsaveData = await unsaveRes.json();
-    expect(unsaveData.unsaved).toBe(true);
-
-    // Check if shop is no longer saved
-    const checkRes = await app.request(`/providers/${providerId}/saved`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${clientToken}` },
-    });
-
-    const checkData = await checkRes.json();
-    expect(checkData.isSaved).toBe(false);
-
-    // List should be empty
-    const listRes = await app.request("/me/saved-shops", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${clientToken}` },
-    });
-
-    const listData = await listRes.json();
-    expect(listData.shops.length).toBe(0);
+      const listRes = await app.request("/me/saved-shops", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${clientToken}` },
+      });
+      assert.equal((await listRes.json()).shops.length, 0);
+    } finally {
+      closeDatabase(result);
+    }
   });
 
   test("Cannot save unapproved shop", async () => {
-    const db = testDb();
-    const app = createApp(db);
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const providerId = await seedShop(result, PROVIDER_WALLET, "Unapproved Shop", false);
+      const clientToken = await issuePactlyJwt(CLIENT_WALLET);
 
-    // Set up: create an unapproved provider
-    const categoryId = await insertCategory(db, { name: "Test Category", slug: "test-category" });
-    const providerId = await insertProviderProfile(db, {
-      walletAddress: testWallet,
-      displayName: "Unapproved Shop",
-      title: "Test Service",
-      categoryId,
-      location: "Test City",
-      serviceDescription: "Test description",
-      sessionFormat: "in_person",
-      sessionLengthMinutes: 60,
-      priceAmount: "10000000",
-      depositRateBps: 1000,
-      cancellationWindowHours: 24,
-      isApproved: false, // Not approved
-      verifiedSessionCount: 0,
-    });
-
-    const clientToken = await issuePactlyJwt(testWallet2);
-
-    const res = await app.request(`/providers/${providerId}/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${clientToken}`,
-      },
-    });
-
-    expect(res.status).toBe(409);
-    const data = await res.json();
-    expect(data.code).toBe("SHOP_NOT_APPROVED");
+      const res = await save(app, providerId, clientToken);
+      assert.equal(res.status, 409);
+      assert.equal((await res.json()).code, "SHOP_NOT_APPROVED");
+    } finally {
+      closeDatabase(result);
+    }
   });
 
   test("Cannot save nonexistent shop", async () => {
-    const db = testDb();
-    const app = createApp(db);
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const clientToken = await issuePactlyJwt(CLIENT_WALLET);
 
-    const clientToken = await issuePactlyJwt(testWallet2);
-
-    const res = await app.request("/providers/nonexistent-shop-id/save", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${clientToken}`,
-      },
-    });
-
-    expect(res.status).toBe(404);
-    const data = await res.json();
-    expect(data.code).toBe("SHOP_NOT_FOUND");
+      const res = await save(app, "nonexistent-shop-id", clientToken);
+      assert.equal(res.status, 404);
+      assert.equal((await res.json()).code, "SHOP_NOT_FOUND");
+    } finally {
+      closeDatabase(result);
+    }
   });
 
   test("Another client does not see the list", async () => {
-    const db = testDb();
-    const app = createApp(db);
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const providerId = await seedShop(result, PROVIDER_WALLET, "Test Shop");
+      await save(app, providerId, await issuePactlyJwt(CLIENT_WALLET));
 
-    // Set up: create an approved provider
-    const categoryId = await insertCategory(db, { name: "Test Category", slug: "test-category" });
-    const providerId = await insertProviderProfile(db, {
-      walletAddress: testWallet,
-      displayName: "Test Shop",
-      title: "Test Service",
-      categoryId,
-      location: "Test City",
-      serviceDescription: "Test description",
-      sessionFormat: "in_person",
-      sessionLengthMinutes: 60,
-      priceAmount: "10000000",
-      depositRateBps: 1000,
-      cancellationWindowHours: 24,
-      isApproved: true,
-      verifiedSessionCount: 0,
-    });
-
-    // Client 1 saves the shop
-    const client1Token = await issuePactlyJwt(testWallet2);
-    await app.request(`/providers/${providerId}/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${client1Token}`,
-      },
-    });
-
-    // Client 2 should not see it in their list
-    const client2Token = await issuePactlyJwt(testWallet3);
-    const listRes = await app.request("/me/saved-shops", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${client2Token}` },
-    });
-
-    expect(listRes.status).toBe(200);
-    const listData = await listRes.json();
-    expect(listData.shops.length).toBe(0);
+      const listRes = await app.request("/me/saved-shops", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${await issuePactlyJwt(OTHER_WALLET)}` },
+      });
+      assert.equal(listRes.status, 200);
+      assert.equal((await listRes.json()).shops.length, 0);
+    } finally {
+      closeDatabase(result);
+    }
   });
 
   test("Suspended shop stays on the list and is marked not taking bookings", async () => {
-    const db = testDb();
-    const app = createApp(db);
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const providerId = await seedShop(result, PROVIDER_WALLET, "Test Shop");
+      const clientToken = await issuePactlyJwt(CLIENT_WALLET);
+      await save(app, providerId, clientToken);
 
-    // Set up: create an approved provider
-    const categoryId = await insertCategory(db, { name: "Test Category", slug: "test-category" });
-    const providerId = await insertProviderProfile(db, {
-      walletAddress: testWallet,
-      displayName: "Test Shop",
-      title: "Test Service",
-      categoryId,
-      location: "Test City",
-      serviceDescription: "Test description",
-      sessionFormat: "in_person",
-      sessionLengthMinutes: 60,
-      priceAmount: "10000000",
-      depositRateBps: 1000,
-      cancellationWindowHours: 24,
-      isApproved: true,
-      verifiedSessionCount: 0,
-    });
+      // Suspend the shop (set isApproved to false)
+      await result.db.update(providerProfiles).set({ isApproved: false }).where(eq(providerProfiles.id, providerId));
 
-    // Client saves the shop
-    const clientToken = await issuePactlyJwt(testWallet2);
-    await app.request(`/providers/${providerId}/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${clientToken}`,
-      },
-    });
-
-    // Suspend the shop (set isApproved to false)
-    await db
-      .update(await import("../src/db/schema.js").then((m) => m.providerProfiles))
-      .set({ isApproved: false })
-      .where(
-        (await import("drizzle-orm").then((m) => m.eq))(
-          (await import("../src/db/schema.js").then((m) => m.providerProfiles)).id,
-          providerId,
-        ),
-      )
-      .run();
-
-    // List should still include the shop, with isApproved: false
-    const listRes = await app.request("/me/saved-shops", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${clientToken}` },
-    });
-
-    expect(listRes.status).toBe(200);
-    const listData = await listRes.json();
-    expect(listData.shops.length).toBe(1);
-    expect(listData.shops[0].provider.isApproved).toBe(false);
+      const listRes = await app.request("/me/saved-shops", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${clientToken}` },
+      });
+      assert.equal(listRes.status, 200);
+      const listData = await listRes.json();
+      assert.equal(listData.shops.length, 1);
+      assert.equal(listData.shops[0].provider.isApproved, false);
+    } finally {
+      closeDatabase(result);
+    }
   });
 
   test("List saved shops newest first", async () => {
-    const db = testDb();
-    const app = createApp(db);
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const provider1Id = await seedShop(result, PROVIDER_WALLET, "Shop One");
+      const provider2Id = await seedShop(result, OTHER_WALLET, "Shop Two");
+      const clientToken = await issuePactlyJwt(THIRD_WALLET);
 
-    // Set up: create multiple approved providers
-    const categoryId = await insertCategory(db, { name: "Test Category", slug: "test-category" });
-    const provider1Id = await insertProviderProfile(db, {
-      walletAddress: testWallet,
-      displayName: "Shop One",
-      title: "Test Service",
-      categoryId,
-      location: "Test City",
-      serviceDescription: "Test description",
-      sessionFormat: "in_person",
-      sessionLengthMinutes: 60,
-      priceAmount: "10000000",
-      depositRateBps: 1000,
-      cancellationWindowHours: 24,
-      isApproved: true,
-      verifiedSessionCount: 0,
-    });
+      await save(app, provider1Id, clientToken);
+      await save(app, provider2Id, clientToken);
+      // `createdAt` is epoch *seconds*, so a 10ms sleep would usually fall
+      // inside the same second. Give the second save an unambiguously later
+      // timestamp instead of relying on wall-clock luck.
+      const savedSecond = await result.db
+        .select()
+        .from(savedShops)
+        .where(eq(savedShops.providerProfileId, provider2Id))
+        .get();
+      assert.ok(savedSecond);
+      await result.db
+        .update(savedShops)
+        .set({ createdAt: savedSecond.createdAt + 10 })
+        .where(eq(savedShops.id, savedSecond.id));
 
-    const provider2Id = await insertProviderProfile(db, {
-      walletAddress: testWallet2,
-      displayName: "Shop Two",
-      title: "Another Service",
-      categoryId,
-      location: "Another City",
-      serviceDescription: "Another description",
-      sessionFormat: "video",
-      sessionLengthMinutes: 30,
-      priceAmount: "5000000",
-      depositRateBps: 500,
-      cancellationWindowHours: 12,
-      isApproved: true,
-      verifiedSessionCount: 5,
-    });
-
-    const clientToken = await issuePactlyJwt(testWallet3);
-
-    // Save provider1 first
-    await app.request(`/providers/${provider1Id}/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${clientToken}`,
-      },
-    });
-
-    // Wait a bit
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    // Save provider2 second
-    await app.request(`/providers/${provider2Id}/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${clientToken}`,
-      },
-    });
-
-    // List should show provider2 first (newest)
-    const listRes = await app.request("/me/saved-shops", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${clientToken}` },
-    });
-
-    const listData = await listRes.json();
-    expect(listData.shops.length).toBe(2);
-    expect(listData.shops[0].provider.displayName).toBe("Shop Two");
-    expect(listData.shops[1].provider.displayName).toBe("Shop One");
+      const listRes = await app.request("/me/saved-shops", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${clientToken}` },
+      });
+      const listData = await listRes.json();
+      assert.equal(listData.shops.length, 2);
+      assert.equal(listData.shops[0].provider.displayName, "Shop Two");
+      assert.equal(listData.shops[1].provider.displayName, "Shop One");
+    } finally {
+      closeDatabase(result);
+    }
   });
 
   test("Unauthenticated user cannot save shop", async () => {
-    const db = testDb();
-    const app = createApp(db);
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const providerId = await seedShop(result, PROVIDER_WALLET, "Test Shop");
 
-    // Set up: create an approved provider
-    const categoryId = await insertCategory(db, { name: "Test Category", slug: "test-category" });
-    const providerId = await insertProviderProfile(db, {
-      walletAddress: testWallet,
-      displayName: "Test Shop",
-      title: "Test Service",
-      categoryId,
-      location: "Test City",
-      serviceDescription: "Test description",
-      sessionFormat: "in_person",
-      sessionLengthMinutes: 60,
-      priceAmount: "10000000",
-      depositRateBps: 1000,
-      cancellationWindowHours: 24,
-      isApproved: true,
-      verifiedSessionCount: 0,
-    });
-
-    // No auth header
-    const res = await app.request(`/providers/${providerId}/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-
-    expect(res.status).toBe(401);
-    const data = await res.json();
-    expect(data.code).toBe("unauthorized");
+      const res = await app.request(`/providers/${providerId}/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(res.status, 401);
+      assert.equal((await res.json()).code, "unauthorized");
+    } finally {
+      closeDatabase(result);
+    }
   });
 
   test("Unauthenticated user cannot list saved shops", async () => {
-    const db = testDb();
-    const app = createApp(db);
-
-    // No auth header
-    const res = await app.request("/me/saved-shops", {
-      method: "GET",
-    });
-
-    expect(res.status).toBe(401);
-    const data = await res.json();
-    expect(data.code).toBe("unauthorized");
+    const result = openTestDatabase();
+    try {
+      const app = createApp(result.db);
+      const res = await app.request("/me/saved-shops", { method: "GET" });
+      assert.equal(res.status, 401);
+      assert.equal((await res.json()).code, "unauthorized");
+    } finally {
+      closeDatabase(result);
+    }
   });
 });

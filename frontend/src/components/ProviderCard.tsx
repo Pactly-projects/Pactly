@@ -53,6 +53,16 @@ export function ProviderCard({ provider, variant = "compact", index = 0 }: Provi
   const photoSrc = providerPhotoSrc(provider.id);
   const firstSlot = provider.earliestSlots[0];
   const lockHref = firstSlot ? `/book/${provider.id}?slot=${firstSlot}` : `/providers/${provider.id}`;
+  const details = providerCardDetails({
+    sessionLengthMinutes: provider.sessionLengthMinutes,
+    serviceCount: provider.serviceCount,
+    priceAmount: provider.price?.amount,
+  });
+  const price = details.hasPrice ? (
+    <TryAmount amount={provider.price.amount} />
+  ) : (
+    <span>Price unset</span>
+  );
   const weeklyHours = provider.publicHours ?? [];
   const hasPublicHours = weeklyHours.some((day) => day.hours !== "Closed");
   const publicHours = (

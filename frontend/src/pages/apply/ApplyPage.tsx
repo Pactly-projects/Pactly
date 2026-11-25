@@ -4,6 +4,7 @@ import { HourglassIcon, SealCheckIcon, StorefrontIcon, WarningCircleIcon } from 
 
 import { ApiError } from "../../api/client";
 import {
+  useApplicationDepositPreview,
   useCategories,
   useOwnProviderApplication,
   useOwnProviderProfile,
@@ -49,11 +50,12 @@ const EMPTY_FORM: FormValues = {
 
 /** A rejected application pre-fills the form so the applicant only fixes
  * what the reason asked for. Location is not stored on the application
- * (the profile carries it), so it starts empty again. The price is shown
- * in TRY at `rate` and converted back on submit -- a re-application may
+ * (the profile carries it), so a re-application starts it empty again; a
+ * pending edit passes the profile's current location instead. The price is
+ * shown in TRY at `rate` and converted back on submit -- a re-application may
  * therefore land a smallest-unit or so away from the rejected one, which
  * is fine: it is a fresh application, not an edit of a live price. */
-function formFromApplication(application: ProviderApplication, rate: string, decimals: number): FormValues {
+function formFromApplication(application: ProviderApplication, rate: string, decimals: number, location = ""): FormValues {
   return {
     name: application.name,
     title: application.title,
@@ -82,6 +84,7 @@ export function ApplyPage() {
   const applicationQuery = useOwnProviderApplication(session);
   const profileQuery = useOwnProviderProfile(session);
   const submit = useSubmitProviderApplication(session);
+  const update = useUpdateProviderApplication(session);
   const { rate, decimals } = useTryRate();
 
   function handleSignOut(): void {
@@ -192,7 +195,8 @@ export function ApplyPage() {
           </p>
           <ApplicationForm
             key={`edit-${application.id}`}
-            initial={formFromApplication(application, rate, profile?.location ?? "")}
+            session={session}
+            initial={formFromApplication(application, rate, decimals, profile?.location ?? "")}
             categories={categoriesQuery.data?.categories ?? []}
             pending={update.isPending}
             error={update.error}
@@ -272,7 +276,7 @@ interface ApplicationFormProps {
   onSubmit: (input: Parameters<ReturnType<typeof useSubmitProviderApplication>["mutate"]>[0]) => void;
 }
 
-function ApplicationForm({ initial, categories, pending, error, submitLabel, onSubmit }: ApplicationFormProps) {
+function ApplicationForm({ session, initial, categories, pending, error, submitLabel, onSubmit }: ApplicationFormProps) {
   const [values, setValues] = useState<FormValues>(initial);
 
   const details = error instanceof ApiError ? ((error.details ?? {}) as Record<string, string>) : {};

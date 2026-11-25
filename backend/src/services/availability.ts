@@ -32,6 +32,7 @@ import {
   listLockedBookingsOnDate,
 } from "../db/closedDates.js";
 import { getProviderProfileById, getProviderProfileByWallet } from "../db/providerProfiles.js";
+import { availabilitySlots, bookings } from "../db/schema.js";
 import {
   BookingEscrowStateError,
   SlotUnavailableError,
@@ -672,6 +673,42 @@ export function localDateRange(
   }
   const rangeStart = Math.floor(utcMidnight / 1000) + tzOffsetMinutes * 60;
   return { rangeStart, rangeEnd: rangeStart + DAY_SECONDS };
+}
+
+/**
+ * `POST /me/provider/availability/close-date`: resolves the caller's own
+ * provider profile, releases the date's active unpaid holds (recording
+ * `shop-closed-date` on them so their clients see why), then removes that
+ * date's future open slots. Other dates are untouched. Idempotent: closing
+ * an already-closed or hold-free date succeeds and reports zero releases.
+ */
+export async function closeProviderDate(
+  db: Db,
+  walletAddress: string,
+  input: CloseProviderDateInput,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<CloseProviderDateView> {
+  const profile = await getProviderProfileByWallet(db, walletAddress);
+  if (!profile) {
+    throw new NotAProviderError();
+  }
+  const { rangeStart, rangeEnd } = localDateRange(input.date, input.tzOffsetMinutes ?? 0);
+
+  const release = await releaseUnpaidHoldsForProviderDate(db, profile.id, rangeStart, rangeEnd, now);
+  const closedSlotCount = await closeSlotsInRange(db, profile.id, rangeStart, rangeEnd, now);
+
+  return {
+    date: input.date,
+    rangeStart,
+    rangeEnd,
+    releasedHoldCount: release.released.length,
+    releasedBookingIds: release.released.map((booking) => booking.bookingId),
+    closedSlotCount,
+    needsResolution: release.needsResolution.map((booking) => ({
+      bookingId: booking.bookingId,
+      slotStartsAt: booking.slotStartsAt,
+    })),
+  };
 }
 
 /**

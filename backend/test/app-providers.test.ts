@@ -14,6 +14,17 @@ import { issuePactlyJwt } from "../src/auth/challenge.js";
 import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
 import { closeDatabase, openTestDatabase, seedCategory, seedProviderProfile } from "./helpers.js";
 
+/** Discovery is bookable-only (a slotless shop has nothing to book), so a
+ * test about filtering/search needs its fixtures to have at least one open
+ * slot before they can appear in `/providers`. */
+async function makeBookable(
+  result: ReturnType<typeof openTestDatabase>,
+  providerProfileId: string,
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  await replaceFutureSlots(result.db, providerProfileId, [now + 3600], now);
+}
+
 test("GET /categories returns every category", async () => {
   const result = openTestDatabase();
   try {
@@ -81,7 +92,9 @@ test("GET /providers?category=<slug> filters to that category's approved provide
   try {
     const categoryId = await seedCategory(result, "cat-filter");
     const inCategory = await seedProviderProfile(result, { categoryId, isApproved: true });
-    await seedProviderProfile(result, { isApproved: true });
+    const other = await seedProviderProfile(result, { isApproved: true });
+    await makeBookable(result, inCategory);
+    await makeBookable(result, other);
     const app = createApp(result.db);
     const response = await app.request("/providers?category=consulting-cat-filter");
     assert.equal(response.status, 200);
@@ -117,7 +130,9 @@ test("GET /providers?q= filters by text search", async () => {
   const result = openTestDatabase();
   try {
     const match = await seedProviderProfile(result, { isApproved: true, displayName: "Marmara Hair Clinic" });
-    await seedProviderProfile(result, { isApproved: true, displayName: "Northside Barber" });
+    const other = await seedProviderProfile(result, { isApproved: true, displayName: "Northside Barber" });
+    await makeBookable(result, match);
+    await makeBookable(result, other);
     const app = createApp(result.db);
     const response = await app.request("/providers?q=hair");
     assert.equal(response.status, 200);
@@ -136,7 +151,10 @@ test("GET /providers?format=a&format=b matches either format (repeated query par
   try {
     const inPerson = await seedProviderProfile(result, { isApproved: true, sessionFormat: "in_person" });
     const video = await seedProviderProfile(result, { isApproved: true, sessionFormat: "video" });
-    await seedProviderProfile(result, { isApproved: true, sessionFormat: "phone" });
+    const phone = await seedProviderProfile(result, { isApproved: true, sessionFormat: "phone" });
+    await makeBookable(result, inPerson);
+    await makeBookable(result, video);
+    await makeBookable(result, phone);
     const app = createApp(result.db);
     const response = await app.request("/providers?format=in_person&format=video");
     assert.equal(response.status, 200);
@@ -154,8 +172,11 @@ test("GET /providers?minPrice=&maxPrice= filters the price range", async () => {
   const result = openTestDatabase();
   try {
     const mid = await seedProviderProfile(result, { isApproved: true, priceAmount: "50000000" });
-    await seedProviderProfile(result, { isApproved: true, priceAmount: "5000000" });
-    await seedProviderProfile(result, { isApproved: true, priceAmount: "500000000" });
+    const low = await seedProviderProfile(result, { isApproved: true, priceAmount: "5000000" });
+    const high = await seedProviderProfile(result, { isApproved: true, priceAmount: "500000000" });
+    await makeBookable(result, mid);
+    await makeBookable(result, low);
+    await makeBookable(result, high);
     const app = createApp(result.db);
     const response = await app.request("/providers?minPrice=10000000&maxPrice=100000000");
     assert.equal(response.status, 200);
@@ -173,6 +194,7 @@ test("GET /providers?minPrice=not-a-number ignores the invalid param rather than
   const result = openTestDatabase();
   try {
     const id = await seedProviderProfile(result, { isApproved: true, priceAmount: "5000000" });
+    await makeBookable(result, id);
     const app = createApp(result.db);
     const response = await app.request("/providers?minPrice=not-a-number");
     assert.equal(response.status, 200);
@@ -191,6 +213,8 @@ test("GET /providers?maxDepositBps= filters the deposit cap, ignoring an out-of-
   try {
     const low = await seedProviderProfile(result, { isApproved: true, depositRateBps: 2000 });
     const high = await seedProviderProfile(result, { isApproved: true, depositRateBps: 5000 });
+    await makeBookable(result, low);
+    await makeBookable(result, high);
     const app = createApp(result.db);
 
     const filtered = await app.request("/providers?maxDepositBps=3000");

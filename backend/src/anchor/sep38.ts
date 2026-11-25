@@ -45,6 +45,10 @@ export const DEFAULT_QUOTE_MAX_AGE_SECONDS = 60;
  * matching `frontend/src/lib/money.ts` and `escrow/trustless-work/
  * reconciler.ts`'s `humanDecimalToSmallestUnits`. */
 const SMALLEST_UNIT_DECIMALS = 7;
+/** A fiat currency the anchor advertises in `sep38/info` but does not give
+ * a `[[CURRENCIES]]` display precision for still gets a usable quote: two
+ * decimals is the conventional fiat precision and matches the mock anchor. */
+const DEFAULT_FIAT_DECIMALS = 2;
 /** USDC cache rounding is applied using the anchor fiat precision below. */
 
 /** Minimal shape this module needs from `fetch` -- a superset of
@@ -191,17 +195,16 @@ async function resolveQuoteConfig(fetchImpl: Sep38FetchLike, forceRefresh: boole
     throw new AnchorQuoteUnsupportedError(`${homeDomain}'s SEP-38 advertised a fiat asset with no currency code: "${buyAsset}"`);
   }
   const currencyEntry = endpoints.currencies.find((entry) => entry.code === currency);
-  if (!currencyEntry || currencyEntry.displayDecimals === undefined) {
-    throw new AnchorQuoteUnavailableError(
-      `${homeDomain}'s stellar.toml has no display_decimals configuration for ${currency}`,
-    );
-  }
-  if (currencyEntry.displayDecimals < 0 || currencyEntry.displayDecimals > SMALLEST_UNIT_DECIMALS) {
+  const configuredDecimals = currencyEntry?.displayDecimals;
+  if (
+    configuredDecimals !== undefined &&
+    (configuredDecimals < 0 || configuredDecimals > SMALLEST_UNIT_DECIMALS)
+  ) {
     throw new AnchorQuoteUnavailableError(
       `${homeDomain}'s ${currency} display_decimals configuration is invalid`,
     );
   }
-  const decimals = currencyEntry.displayDecimals;
+  const decimals = configuredDecimals ?? DEFAULT_FIAT_DECIMALS;
 
   cachedConfig = { quoteServer: endpoints.quoteServer, sellAsset, buyAsset, assetCode: usdc.code, currency, decimals };
   return cachedConfig;
@@ -361,6 +364,8 @@ export async function fetchIndicativePrice(
       asset: cfg.assetCode,
       fiat: { amount: cached.fiatAmount, currency: cached.currency, decimals: cached.decimals },
       quotedAt: Math.floor(cached.quotedAtMs / 1000),
+      maxAgeSeconds: cached.maxAgeSeconds,
+      expiresAt: Math.floor(cached.quotedAtMs / 1000) + cached.maxAgeSeconds,
       spreadApplied: true,
     };
   }
@@ -395,13 +400,21 @@ export async function fetchIndicativePrice(
   const quotedAt = Math.floor(nowMs / 1000);
   const maxAgeSeconds = readQuoteMaxAge(body, quotedAt);
 
-  priceCache.set(cacheKey, { fiatAmount, currency: cfg.currency, decimals: cfg.decimals, quotedAtMs: nowMs });
+  priceCache.set(cacheKey, {
+    fiatAmount,
+    currency: cfg.currency,
+    decimals: cfg.decimals,
+    quotedAtMs: nowMs,
+    maxAgeSeconds,
+  });
 
   return {
     amount,
     asset: cfg.assetCode,
     fiat: { amount: fiatAmount, currency: cfg.currency, decimals: cfg.decimals },
-    quotedAt: Math.floor(nowMs / 1000),
+    quotedAt,
+    maxAgeSeconds,
+    expiresAt: quotedAt + maxAgeSeconds,
     spreadApplied: true,
   };
 }

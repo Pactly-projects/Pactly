@@ -9,13 +9,14 @@ import { StrKey } from "@stellar/stellar-sdk";
 import { randomBytes } from "node:crypto";
 
 import { createApp } from "../src/app.js";
+import { issueMoneyAssertionToken } from "../src/auth/assertion.js";
 import { issuePactlyJwt } from "../src/auth/challenge.js";
 import { updateEscrowContractId, updateEscrowStateSync } from "../src/db/bookings.js";
 import { insertEscrowProcessedEventIfNew } from "../src/db/escrowProcessedEvents.js";
 import { countAdminDecisionAudit } from "../src/db/adminDecisionAudit.js";
 import type { EscrowAdapter } from "../src/escrow/interface.js";
 import { DISPUTE_RESOLVER_ADMIN_WALLET, NON_RESOLVER_ADMIN_WALLET } from "./testConfigEnvAdmin.js";
-import { closeDatabase, openTestDatabase, seedBooking, seedCategory } from "./helpers.js";
+import { closeDatabase, openTestDatabase, seedBooking, seedCategory, USDC_READY_WALLET_DEPS } from "./helpers.js";
 
 const APPLICANT = "GAPPLICANTAUDITWALLETFORISSUE14";
 
@@ -34,8 +35,12 @@ function validApplication(categoryId: string) {
   };
 }
 
-async function bearer(walletAddress: string): Promise<{ authorization: string; "content-type": string }> {
-  return { authorization: `Bearer ${await issuePactlyJwt(walletAddress)}`, "content-type": "application/json" };
+async function bearer(walletAddress: string): Promise<Record<string, string>> {
+  return {
+    authorization: `Bearer ${await issuePactlyJwt(walletAddress)}`,
+    "x-pactly-assertion": await issueMoneyAssertionToken(walletAddress),
+    "content-type": "application/json",
+  };
 }
 
 function fakeContractId(): string {
@@ -62,7 +67,10 @@ test("approving an application writes one audit row and a failed reject leaves t
   const result = openTestDatabase();
   try {
     const categoryId = await seedCategory(result, "cat-audit-approve");
-    const app = createApp(result.db, { escrowAdapter: noopEscrowAdapter() });
+    const app = createApp(result.db, {
+      escrowAdapter: noopEscrowAdapter(),
+      usdcTrustlineDeps: USDC_READY_WALLET_DEPS,
+    });
     const applicant = await bearer(APPLICANT);
     const admin = await bearer(NON_RESOLVER_ADMIN_WALLET);
 
