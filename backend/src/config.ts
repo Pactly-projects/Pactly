@@ -86,6 +86,25 @@ function optionalList(name: string, fallback: string): string[] {
     .filter((item) => item.length > 0);
 }
 
+/** An optional positive integer, falling back to `fallback` when absent or
+ * empty -- for the rate-limit knobs, so an existing `.env` keeps booting. */
+function optionalPositiveInt(name: string, fallback: number): number {
+  const raw = optional(name, String(fallback));
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new ConfigError(`Environment variable ${name} must be a positive integer, got "${raw}"`);
+  }
+  return value;
+}
+
+/** An optional `true`/`false`, falling back to `fallback`. */
+function optionalBoolean(name: string, fallback: boolean): boolean {
+  const raw = optional(name, String(fallback)).toLowerCase();
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0") return false;
+  throw new ConfigError(`Environment variable ${name} must be true or false, got "${raw}"`);
+}
+
 function databasePath(name: string): string {
   const value = required(name);
   return isAbsolute(value) ? value : resolve(backendDir, value);
@@ -161,6 +180,16 @@ export interface Config {
   /** OpenZeppelin Channels relayer (Passkey Kit). Empty = fee-bump locally. */
   passkeyRelayerBaseUrl: string;
   passkeyRelayerApiKey: string;
+  /** Per-IP request limits (`http/rateLimit.ts`). Discovery covers the
+   * public browse/search/profile reads; booking covers `/bookings/...` and
+   * `/me/bookings`, with a higher default because a booking page polls. */
+  rateLimitWindowSeconds: number;
+  rateLimitDiscoveryMax: number;
+  rateLimitBookingMax: number;
+  /** Take the client IP from `X-Forwarded-For`. Defaults on under Vercel
+   * (which overwrites that header) and off elsewhere, where a client could
+   * set it to anything. */
+  trustProxy: boolean;
 }
 
 function loadConfig(): Config {
@@ -184,6 +213,10 @@ function loadConfig(): Config {
     passkeyRpOrigins: optionalList("PACTLY_RP_ORIGIN", "http://localhost:5173"),
     passkeyRelayerBaseUrl: optional("PASSKEY_RELAYER_BASE_URL", ""),
     passkeyRelayerApiKey: optional("PASSKEY_RELAYER_API_KEY", ""),
+    rateLimitWindowSeconds: optionalPositiveInt("PACTLY_RATE_LIMIT_WINDOW_SECONDS", 60),
+    rateLimitDiscoveryMax: optionalPositiveInt("PACTLY_RATE_LIMIT_DISCOVERY_MAX", 120),
+    rateLimitBookingMax: optionalPositiveInt("PACTLY_RATE_LIMIT_BOOKING_MAX", 300),
+    trustProxy: optionalBoolean("PACTLY_TRUST_PROXY", process.env.VERCEL === "1"),
   };
 }
 

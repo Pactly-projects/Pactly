@@ -839,6 +839,8 @@ export const savedShops = sqliteTable(
   },
   (table) => [unique().on(table.clientWalletAddress, table.providerProfileId)],
 );
+
+/**
  * Shop reports: a signed-in client can report a shop listing to admins.
  * One report per client per shop per day. Does not change the shop's status.
  */
