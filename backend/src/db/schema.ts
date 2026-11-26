@@ -251,6 +251,12 @@ export const bookings = sqliteTable("bookings", {
    * earlier deploy may already have landed and been funded.
    */
   escrowContractId: text("escrow_contract_id"),
+   /** UTC epoch seconds when the last chain read for this booking completed
+    * successfully. Failed reads never advance this timestamp. */
+   escrowReconciledAt: integer("escrow_reconciled_at"),
+   /** UTC epoch seconds of the most recent user-requested reconcile attempt,
+    * used to enforce the per-booking refresh interval across app instances. */
+   escrowReconcileAttemptedAt: integer("escrow_reconcile_attempted_at"),
   /**
    * Issue #6: the in-flight first-deploy claim's own token. `lockDeposit`
    * takes this claim with one conditioned `UPDATE` *before* it calls the

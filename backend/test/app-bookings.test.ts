@@ -20,7 +20,13 @@ import { createApp } from "../src/app.js";
 import { issueMoneyAssertionToken } from "../src/auth/assertion.js";
 import { issuePactlyJwt } from "../src/auth/challenge.js";
 import { replaceFutureSlots } from "../src/db/availabilitySlots.js";
-import { getBookingById, insertBooking, updateEscrowContractId, updateEscrowState } from "../src/db/bookings.js";
+import {
+  getBookingById,
+  insertBooking,
+  recordEscrowReconciledAtSync,
+  updateEscrowContractId,
+  updateEscrowState,
+} from "../src/db/bookings.js";
 import { insertProviderProfile } from "../src/db/providerProfiles.js";
 import { availabilitySlots, categories } from "../src/db/schema.js";
 import { holdSlot, TooManyHoldsError } from "../src/services/booking.js";
@@ -29,6 +35,7 @@ import type { EscrowAdapter } from "../src/escrow/interface.js";
 import {
   closeDatabase,
   openTestDatabase,
+  seedBooking,
   seedProviderProfile,
   USDC_CHECK_UNAVAILABLE_WALLET_DEPS,
   USDC_MISSING_WALLET_DEPS,
@@ -236,11 +243,97 @@ test("GET /bookings/:id returns the owner's own booking view", async () => {
       escrowState: string | null;
       cancelDeadline: number;
       serverTime: number;
+      lastReconciledAt: number | null;
     };
     assert.equal(body.id, hold.bookingId);
     assert.equal(body.escrowState, null);
     assert.equal(typeof body.cancelDeadline, "number");
     assert.ok(body.serverTime >= before && body.serverTime <= after);
+    assert.equal(body.lastReconciledAt, null);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("manual reconcile failure preserves the stale timestamp and escrow state, then rate-limits retries", async () => {
+  const result = openTestDatabase();
+  try {
+    const clientWalletAddress = "GCLIENTRECONCILE";
+    const providerProfileId = await seedProviderProfile(result);
+    const bookingId = await seedBooking(result, { providerProfileId, clientWalletAddress });
+    const contractId = "CCONTRACTRECONCILE";
+    const staleTimestamp = Math.floor(Date.now() / 1000) - 600;
+    await updateEscrowContractId(result.db, bookingId, contractId);
+    await updateEscrowState(result.db, bookingId, "locked");
+    recordEscrowReconciledAtSync(result.db, bookingId, contractId, staleTimestamp);
+
+    let chainCalls = 0;
+    const app = createApp(result.db, {
+      reconcilerListEscrows: async () => {
+        chainCalls += 1;
+        throw new Error("chain unavailable");
+      },
+    });
+    const headers = await authHeader(clientWalletAddress);
+    const initial = await app.request(`/bookings/${bookingId}`, { headers });
+    assert.equal(initial.status, 200);
+    const initialView = (await initial.json()) as { escrowState: string | null; lastReconciledAt: number | null };
+    assert.equal(initialView.escrowState, "locked");
+    assert.equal(initialView.lastReconciledAt, staleTimestamp);
+
+    const failedRefresh = await app.request(`/bookings/${bookingId}/reconcile`, { method: "POST", headers });
+    assert.equal(failedRefresh.status, 503);
+    const failedBody = (await failedRefresh.json()) as { code: string; message: string };
+    assert.equal(failedBody.code, "ESCROW_UNAVAILABLE");
+    assert.match(failedBody.message, /last known booking status is unchanged/i);
+    assert.equal(chainCalls, 1);
+
+    const repeatedRefresh = await app.request(`/bookings/${bookingId}/reconcile`, { method: "POST", headers });
+    assert.equal(repeatedRefresh.status, 429);
+    assert.equal(chainCalls, 1);
+
+    const booking = await getBookingById(result.db, bookingId);
+    assert.equal(booking?.escrowState, "locked");
+    assert.equal(booking?.escrowReconciledAt, staleTimestamp);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("manual reconcile updates the successful timestamp and does not call the chain without a contract", async () => {
+  const result = openTestDatabase();
+  try {
+    const clientWalletAddress = "GCLIENTRECONCILESUCCESS";
+    const providerProfileId = await seedProviderProfile(result);
+    const bookingId = await seedBooking(result, { providerProfileId, clientWalletAddress });
+    const contractId = "CCONTRACTRECONCILESUCCESS";
+    const staleTimestamp = Math.floor(Date.now() / 1000) - 600;
+    await updateEscrowContractId(result.db, bookingId, contractId);
+    await updateEscrowState(result.db, bookingId, "locked");
+    recordEscrowReconciledAtSync(result.db, bookingId, contractId, staleTimestamp);
+
+    let chainCalls = 0;
+    const app = createApp(result.db, {
+      reconcilerListEscrows: async () => {
+        chainCalls += 1;
+        return { data: [], hasMore: false, nextCursor: null };
+      },
+    });
+    const headers = await authHeader(clientWalletAddress);
+    const success = await app.request(`/bookings/${bookingId}/reconcile`, { method: "POST", headers });
+    assert.equal(success.status, 200);
+    const view = (await success.json()) as { escrowState: string | null; lastReconciledAt: number };
+    assert.equal(view.escrowState, "locked");
+    assert.ok(view.lastReconciledAt > staleTimestamp);
+    assert.equal(chainCalls, 1);
+
+    const noContractBookingId = await seedBooking(result, { providerProfileId, clientWalletAddress: "GCLIENTNOCONTRACT" });
+    const noContract = await app.request(`/bookings/${noContractBookingId}/reconcile`, {
+      method: "POST",
+      headers: await authHeader("GCLIENTNOCONTRACT"),
+    });
+    assert.equal(noContract.status, 409);
+    assert.equal(chainCalls, 1);
   } finally {
     closeDatabase(result);
   }

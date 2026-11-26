@@ -712,14 +712,6 @@ export async function updateProviderIntake(
     null,
   );
   // Update the profile's intake answers.
-  const intakeAnswersJson = JSON.stringify(
-    Object.entries(newAnswers).map(([questionId, { answer, isOptional }]) => ({
-      questionId,
-      answer: answer ?? null,
-      isOptional,
-    })),
-    null,
-  );
   // Use drizzle-orm to update the intake_answers column.
   await db
     .update(providerProfiles)

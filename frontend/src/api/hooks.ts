@@ -307,6 +307,11 @@ export function getBooking(bookingId: string, session: Session): Promise<Booking
   return apiGet<BookingView>(`/bookings/${bookingId}`, session.token);
 }
 
+/** Runs one chain reconcile for this booking and returns its updated view. */
+export function reconcileBooking(bookingId: string, session: Session): Promise<BookingView> {
+  return apiPost<BookingView>(`/bookings/${bookingId}/reconcile`, {}, session.token);
+}
+
 export function submitSignedTransaction(bookingId: string, signedXdr: string, session: Session): Promise<SubmitResponse> {
   return apiPost<SubmitResponse>(`/bookings/${bookingId}/submit`, { signedXdr }, session.token);
 }

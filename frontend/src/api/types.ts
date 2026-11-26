@@ -246,6 +246,9 @@ export interface BookingView {
    * refetch so the free-cancellation countdown stays aligned with the
    * clock that will accept or refuse a cancel. */
   serverTime: number;
+  /** UTC epoch seconds when the chain state was last reconciled successfully,
+   * or `null` if it has never been checked successfully. */
+  lastReconciledAt: number | null;
   provider: BookingProviderSummary;
   /** Story 3.7: the on-chain transaction hash once the balance was paid
    * through Pactly (`null` for unpaid or paid-in-cash) -- drives the

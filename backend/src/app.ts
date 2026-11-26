@@ -139,6 +139,7 @@ import {
 } from "./services/availability.js";
 import { EscrowApiError, EscrowConfigError, EscrowRequestError } from "./escrow/trustless-work/errors.js";
 import { defaultEscrowAdapter } from "./escrow/trustless-work/client.js";
+import { realListEscrows, runReconcilerOnce, type ReconcilerDeps } from "./escrow/trustless-work/reconciler.js";
 import { TransactionStatusUnavailableError } from "./escrow/transaction-status.js";
 import type { EscrowAdapter } from "./escrow/interface.js";
 import { PaymentFailedError, PaymentUnavailableError } from "./payments/errors.js";
@@ -151,7 +152,12 @@ import {
 } from "./services/bookingsExport.js";
 import { config } from "./config.js";
 import { DISPUTE_OUTCOMES, type DisputeOutcome, type DisputeReason } from "./db/schema.js";
-import { getBookingById, setBookingNote, clearBookingNote } from "./db/bookings.js";
+import {
+  claimEscrowReconcileSync,
+  getBookingById,
+  setBookingNote,
+  clearBookingNote,
+} from "./db/bookings.js";
 import {
   AmountOutOfRangeError,
   AnchorAuthError,
@@ -346,6 +352,10 @@ export interface CreateAppOptions {
    * to exercise `502 ESCROW_REJECTED`/accepted-deploy paths without a real
    * Trustless Work API key. */
   escrowAdapter?: EscrowAdapter;
+  /** Overrides the manual booking reconcile read for route-level tests. */
+  reconcilerListEscrows?: ReconcilerDeps["listEscrows"];
+  /** Overrides the platform-role check for manual reconcile tests. */
+  reconcilerPlatformAddress?: string;
   /** Story 3.7: overrides `POST /bookings/:id/balance/pay`'s own network
    * seams (how the client's account is loaded, how the USDC asset is
    * resolved) -- same "inject the network access" discipline as
@@ -1481,9 +1491,8 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     }
   });
 
-  /** Booking detail for the owning client. Includes `serverTime` (UTC epoch
-   * seconds) alongside `cancelDeadline` so the free-cancellation countdown
-   * can follow the server clock and resync on every poll/refetch. */
+  /** Booking detail for the owning client. Includes `serverTime` for the
+   * cancellation countdown and `lastReconciledAt` for chain-state freshness. */
   app.get("/bookings/:id", requirePactlyAuth, async (c) => {
     const bookingId = c.req.param("id");
     if (!bookingId) {
@@ -1495,6 +1504,54 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     } catch (error) {
       if (error instanceof BookingNotFoundError) {
         return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
+      }
+      throw error;
+    }
+  });
+
+  /** One authenticated, booking-scoped chain refresh. The timestamp is
+   * advanced only by a successful reconciler read; a failed network request
+   * leaves the booking's last known escrow state and timestamp untouched. */
+  app.post("/bookings/:id/reconcile", requirePactlyAuth, async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+    }
+    try {
+      const booking = await getBookingForClient(db, bookingId, c.get("walletAddress"));
+      if (!booking.escrowContractId) {
+        return c.json({ code: "BOOKING_STATE", message: "This booking has no escrow to refresh." }, 409);
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      if (!claimEscrowReconcileSync(db, bookingId, now)) {
+        c.header("Retry-After", "15");
+        return c.json(
+          { code: "RECONCILE_RATE_LIMITED", message: "Please wait before refreshing this booking again." },
+          429,
+        );
+      }
+
+      await runReconcilerOnce({
+        db,
+        bookingId,
+        now,
+        listEscrows: options.reconcilerListEscrows ?? realListEscrows(),
+        ...(options.reconcilerPlatformAddress !== undefined
+          ? { platformAddress: options.reconcilerPlatformAddress }
+          : {}),
+      });
+      return c.json(await getBookingView(db, bookingId, c.get("walletAddress"), now));
+    } catch (error) {
+      if (error instanceof BookingNotFoundError) {
+        return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
+      }
+      if (error instanceof EscrowApiError || error instanceof EscrowRequestError || error instanceof EscrowConfigError) {
+        const response = escrowErrorResponse(error);
+        return c.json(
+          { code: response.code, message: "The chain check failed. The last known booking status is unchanged." },
+          response.status,
+        );
       }
       throw error;
     }
