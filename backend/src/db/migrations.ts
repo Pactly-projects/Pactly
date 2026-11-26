@@ -87,6 +87,8 @@ const STATEMENTS: readonly string[] = [
     escrow_state TEXT,
     balance_state TEXT NOT NULL DEFAULT 'unpaid',
     escrow_contract_id TEXT,
+    escrow_reconciled_at INTEGER,
+    escrow_reconcile_attempted_at INTEGER,
     escrow_lock_claim_token TEXT,
     escrow_lock_claimed_at INTEGER,
     slot_id TEXT REFERENCES availability_slots(id),
@@ -295,6 +297,12 @@ export function runMigrations(sqlite: Database): void {
   }
   if (!hasColumn(sqlite, "bookings", "escrow_contract_id")) {
     sqlite.exec(`ALTER TABLE bookings ADD COLUMN escrow_contract_id TEXT`);
+  }
+  if (!hasColumn(sqlite, "bookings", "escrow_reconciled_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN escrow_reconciled_at INTEGER`);
+  }
+  if (!hasColumn(sqlite, "bookings", "escrow_reconcile_attempted_at")) {
+    sqlite.exec(`ALTER TABLE bookings ADD COLUMN escrow_reconcile_attempted_at INTEGER`);
   }
   if (!hasColumn(sqlite, "provider_profiles", "display_name")) {
     sqlite.exec(`ALTER TABLE provider_profiles ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`);

@@ -2085,6 +2085,9 @@ export interface BookingView {
    * every refetch so the client's free-cancellation countdown stays
    * aligned with the clock that will actually accept or refuse a cancel. */
   serverTime: number;
+  /** UTC epoch seconds of the booking's last successful chain reconcile,
+   * or `null` when no successful chain read has completed yet. */
+  lastReconciledAt: number | null;
   provider: BookingProviderSummary;
   /** Story 3.7: the on-chain transaction hash once the balance was paid
    * through Pactly (`null` otherwise -- unpaid, or paid in cash, which has
@@ -2181,6 +2184,7 @@ export async function getBookingView(
     disputeDeadline: getDisputeDeadline(slotStartsAt),
     cancelDeadline: booking.cancelDeadline,
     serverTime: now,
+    lastReconciledAt: booking.escrowReconciledAt,
     provider: profile
       ? { id: profile.id, displayName: profile.displayName, title: profile.title }
       : { id: booking.providerProfileId, displayName: "", title: "" },

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import {
@@ -11,6 +12,7 @@ import {
   openLocalDeposit,
   requestAnchorChallenge,
   rescheduleBooking,
+  reconcileBooking,
   simulateLocalDeposit,
   submitLocalDepositTrustline,
   submitSignedTransaction,
@@ -91,6 +93,7 @@ const SESSION_FORMAT_LABEL: Record<string, string> = {
 };
 
 const RECONCILE_SLOW_AFTER_MS = 3 * 60 * 1000;
+const RECONCILE_STALE_AFTER_SECONDS = 5 * 60;
 
 function formatDeadline(epochSeconds: number): string {
   return `${formatSlotDay(epochSeconds)} · ${formatSlotTime(epochSeconds)}`;
@@ -127,6 +130,7 @@ export function BookingPage() {
   const [rescheduleError, setRescheduleError] = useState<string | undefined>();
   const [rescheduleNotice, setRescheduleNotice] = useState<string | undefined>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const holdMutation = useHoldSlot();
 
@@ -147,6 +151,8 @@ export function BookingPage() {
   const [clientEmail, setClientEmail] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
   const [localNotice, setLocalNotice] = useState<string | undefined>();
+  const [chainRefreshBusy, setChainRefreshBusy] = useState(false);
+  const [chainRefreshError, setChainRefreshError] = useState<string | undefined>();
   const [lockWalletConfirm, setLockWalletConfirm] = useState<
     | { kind: "flow"; address: string; rebuild: boolean }
     | { kind: "retry"; address: string }
@@ -187,6 +193,17 @@ export function BookingPage() {
   const booking = useBooking(hold?.bookingId, session, {
     enabled: Boolean(hold?.bookingId && session),
   });
+  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setClockNowMs(Date.now()), 15_000);
+    return () => clearInterval(interval);
+  }, []);
+  const lastReconciledAt = booking.data?.lastReconciledAt;
+  const chainStatusStale = Boolean(booking.data?.contractId) && (
+    lastReconciledAt === null
+      || lastReconciledAt === undefined
+      || Math.floor(clockNowMs / 1000) - lastReconciledAt > RECONCILE_STALE_AFTER_SECONDS
+  );
 
   const prefersReducedMotion = useMemo(
     () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
@@ -405,6 +422,28 @@ export function BookingPage() {
       .catch(() => {
         /* the last known facts stay on screen */
       });
+  }
+
+  async function refreshChainState(): Promise<void> {
+    if (!hold || !session || !booking.data?.contractId || chainRefreshBusy) return;
+    setChainRefreshBusy(true);
+    setChainRefreshError(undefined);
+    try {
+      const refreshed = await reconcileBooking(hold.bookingId, session);
+      queryClient.setQueryData(["bookings", hold.bookingId], refreshed);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setChainRefreshError(
+        error instanceof ApiError && error.code === "RECONCILE_RATE_LIMITED"
+          ? error.message
+          : "The chain check failed. The last known status is unchanged.",
+      );
+    } finally {
+      setChainRefreshBusy(false);
+    }
   }
 
   async function ensureSessionAndHold() {
@@ -1282,6 +1321,28 @@ export function BookingPage() {
           stateDetail={escrowStateDetail(phase)}
           contractHistory={depositFacts?.contractHistory}
         >
+          {chainStatusStale && booking.data && (
+            <div className="escrow-lane__notice" role="status">
+              <p>
+                {lastReconciledAt == null
+                  ? "The chain status has not been checked yet."
+                  : `Status last checked ${new Date(lastReconciledAt * 1000).toLocaleString()}.`}
+              </p>
+              <button
+                type="button"
+                className="button-ghost"
+                onClick={() => void refreshChainState()}
+                disabled={chainRefreshBusy}
+              >
+                {chainRefreshBusy ? "Checking chain…" : "Refresh status"}
+              </button>
+              {chainRefreshError && (
+                <p className="escrow-lane__notice--alert" role="alert">
+                  {chainRefreshError}
+                </p>
+              )}
+            </div>
+          )}
           {showLock && !isLocked && phase === "confirming-escrow" && escrowConfirmation && (
             <EscrowConfirmation
               contractId={escrowConfirmation.contractId}

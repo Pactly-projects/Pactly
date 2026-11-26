@@ -51,7 +51,9 @@ import { EscrowConfigError, EscrowRequestError } from "./errors.js";
 import { config } from "../../config.js";
 import {
   getBookingById,
+  getBookingForReconciliation,
   getReconcilableBookings,
+  recordEscrowReconciledAtSync,
   recordVerifiedSessionCountedSync,
   updateEscrowStateIfNotTerminalSync,
   TERMINAL_ESCROW_STATES,
@@ -557,6 +559,10 @@ export async function fetchOwnedEscrows(
 export interface ReconcilerDeps {
   db: Db;
   listEscrows: (params: ListEscrowsParams) => Promise<ListEscrowsResponse>;
+  /** Set only for a caller-requested refresh; periodic runs remain batched. */
+  bookingId?: string;
+  /** UTC epoch seconds override for deterministic callers and tests. */
+  now?: number;
   /** Pactly's own Stellar account -- defaults to `config
    * .trustlessWorkPlatformAddress`. Passed through to
    * `checkEscrowMatchesBooking` for every row this run processes; empty
@@ -588,9 +594,11 @@ export interface RunReconcilerResult {
  * once or several times, against a real temporary database.
  */
 export async function runReconcilerOnce(deps: ReconcilerDeps): Promise<RunReconcilerResult> {
-  const { db, listEscrows, log = defaultLog, platformAddress = config.trustlessWorkPlatformAddress } = deps;
+  const { db, listEscrows, bookingId, log = defaultLog, platformAddress = config.trustlessWorkPlatformAddress } = deps;
 
-  const candidates = await getReconcilableBookings(db);
+  const candidates = bookingId
+    ? [await getBookingForReconciliation(db, bookingId)].filter((candidate) => candidate !== undefined)
+    : await getReconcilableBookings(db);
   let applied = 0;
   let duplicates = 0;
   let anomalies = 0;
@@ -621,6 +629,14 @@ export async function runReconcilerOnce(deps: ReconcilerDeps): Promise<RunReconc
     else if (outcome === "duplicate") duplicates += 1;
     else if (outcome === "anomaly") anomalies += 1;
     else skipped += 1;
+  }
+
+  const reconciledAt = deps.now ?? Math.floor(Date.now() / 1000);
+  for (const candidate of candidates) {
+    const contractId = candidate.booking.escrowContractId;
+    if (contractId) {
+      recordEscrowReconciledAtSync(db, candidate.booking.id, contractId, reconciledAt);
+    }
   }
 
   return { applied, duplicates, anomalies, skipped };

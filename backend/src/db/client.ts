@@ -50,3 +50,7 @@ export function openDatabase(path: string): OpenDatabaseResult {
 export function closeDatabase(result: OpenDatabaseResult): void {
   result.sqlite.close();
 }
+
+/** Db instance exported for convenience. Used by passkey auth module when
+ * a full openDatabase call isn't desired. */
+export const db = openDatabase(":memory:").db;

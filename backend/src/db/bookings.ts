@@ -932,6 +932,47 @@ export async function getReconcilableBookings(db: Db): Promise<ReconcilableBooki
   return rows.map((row) => ({ booking: row.booking, providerAddress: row.providerAddress }));
 }
 
+/** Returns a single booking with a persisted contract for an explicit
+ * reconcile request. Unlike the periodic batch query, this includes terminal
+ * states; `processEscrowRow` still refuses to regress them. */
+export async function getBookingForReconciliation(db: Db, bookingId: string): Promise<ReconcilableBooking | undefined> {
+  const rows = await db
+    .select({ booking: bookings, providerAddress: providerProfiles.walletAddress })
+    .from(bookings)
+    .innerJoin(providerProfiles, eq(bookings.providerProfileId, providerProfiles.id))
+    .where(and(eq(bookings.id, bookingId), isNotNull(bookings.escrowContractId)))
+    .limit(1);
+  const row = rows[0];
+  return row ? { booking: row.booking, providerAddress: row.providerAddress } : undefined;
+}
+
+/** Claims a caller-triggered reconcile. The conditional update is atomic,
+ * so concurrent requests and multiple app instances cannot exceed one
+ * attempt per booking in the 15-second window. */
+export function claimEscrowReconcileSync(db: DbOrTx, bookingId: string, now: number): boolean {
+  const result = db.run(sql`
+    UPDATE bookings
+    SET escrow_reconcile_attempted_at = ${now}
+    WHERE id = ${bookingId}
+      AND escrow_contract_id IS NOT NULL
+      AND (
+        escrow_reconcile_attempted_at IS NULL
+        OR escrow_reconcile_attempted_at <= ${now - 15}
+      )
+  `);
+  return result.changes > 0;
+}
+
+/** Marks the time a booking's chain read and reconciliation completed. */
+export function recordEscrowReconciledAtSync(db: DbOrTx, bookingId: string, contractId: string, now: number): void {
+  db.run(sql`
+    UPDATE bookings
+    SET escrow_reconciled_at = ${now}
+    WHERE id = ${bookingId}
+      AND escrow_contract_id = ${contractId}
+  `);
+}
+
 // ---------------------------------------------------------------------------
 // Story 3.5: the two-sided status panel's own list reads. Each pairs a
 // booking row with its own slot's `startsAt` (`null` for a pre-3.4 booking

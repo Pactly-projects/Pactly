@@ -40,7 +40,14 @@ import {
   runReconcilerOnce,
   type ReconcilerDeps,
 } from "../src/escrow/trustless-work/reconciler.js";
-import { getBookingById, updateEscrowContractId, type BookingRow } from "../src/db/bookings.js";
+import {
+  claimEscrowReconcileSync,
+  getBookingById,
+  recordEscrowReconciledAtSync,
+  updateEscrowContractId,
+  updateEscrowState,
+  type BookingRow,
+} from "../src/db/bookings.js";
 import { recordEscrowDisputeResolution } from "../src/db/escrowDisputeResolutions.js";
 import { getEscrowWatermark, setEscrowWatermark } from "../src/db/escrowReconcilerWatermarks.js";
 import { getEscrowProcessedEvent } from "../src/db/escrowProcessedEvents.js";
@@ -1047,6 +1054,61 @@ test("a refunded booking is likewise excluded from getReconcilableBookings entir
       },
     });
     assert.equal(called, false, "a refunded booking is excluded from the candidate set exactly like a released one");
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("a successful targeted reconcile records its timestamp and is limited to one call per 15 seconds", async () => {
+  const result = openTestDatabase();
+  try {
+    const seed = await seedReconcilableBooking(result);
+    const now = Math.floor(Date.now() / 1000);
+    const staleTimestamp = now - 600;
+    recordEscrowReconciledAtSync(result.db, seed.bookingId, seed.contractId, staleTimestamp);
+    let requestedContractIds: string[] | undefined;
+
+    await runOnce(result.db, {
+      bookingId: seed.bookingId,
+      now,
+      listEscrows: async (params) => {
+        requestedContractIds = params.contractIds;
+        return { data: [], hasMore: false, nextCursor: null };
+      },
+    });
+
+    assert.deepEqual(requestedContractIds, [seed.contractId]);
+    assert.equal((await getBooking(result.db, seed.bookingId))?.escrowReconciledAt, now);
+    assert.equal(claimEscrowReconcileSync(result.db, seed.bookingId, now), true);
+    assert.equal(claimEscrowReconcileSync(result.db, seed.bookingId, now + 14), false);
+    assert.equal(claimEscrowReconcileSync(result.db, seed.bookingId, now + 15), true);
+  } finally {
+    closeDatabase(result);
+  }
+});
+
+test("a failed targeted reconcile preserves the previous chain state and successful timestamp", async () => {
+  const result = openTestDatabase();
+  try {
+    const seed = await seedReconcilableBooking(result);
+    const staleTimestamp = Math.floor(Date.now() / 1000) - 600;
+    recordEscrowReconciledAtSync(result.db, seed.bookingId, seed.contractId, staleTimestamp);
+    await updateEscrowState(result.db, seed.bookingId, "locked");
+
+    await assert.rejects(
+      () =>
+        runOnce(result.db, {
+          bookingId: seed.bookingId,
+          listEscrows: async () => {
+            throw new Error("chain unavailable");
+          },
+        }),
+      EscrowRequestError,
+    );
+
+    const booking = await getBooking(result.db, seed.bookingId);
+    assert.equal(booking?.escrowState, "locked");
+    assert.equal(booking?.escrowReconciledAt, staleTimestamp);
   } finally {
     closeDatabase(result);
   }
