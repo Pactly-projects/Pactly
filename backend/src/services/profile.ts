@@ -218,6 +218,8 @@ export interface ProviderRulesInput {
   maxBookingDaysAhead?: number | null;
   /** Minutes kept free after a locked booking (0-120). Omitted means 0. */
   bufferMinutes?: number;
+  /** Issue #151: "day-before" or "same-morning". Default is "day-before". */
+  reminderTiming?: "day-before" | "same-morning";
 }
 
 export interface IntakeAnswerInput {
@@ -302,6 +304,13 @@ export function validateProviderRules(input: ProviderRulesInput): Record<string,
     bufferMinutes > MAX_BUFFER_MINUTES
   ) {
     details.bufferMinutes = `Buffer must be a whole number of minutes between ${MIN_BUFFER_MINUTES} and ${MAX_BUFFER_MINUTES}.`;
+  }
+
+  // Issue #151: validate reminder timing choice
+  if (input.reminderTiming !== undefined) {
+    if (input.reminderTiming !== "day-before" && input.reminderTiming !== "same-morning") {
+      details.reminderTiming = 'Reminder timing must be "day-before" or "same-morning".';
+    }
   }
 
   // Only checked once the two inputs it depends on are themselves valid --
@@ -462,6 +471,8 @@ export interface ProviderProfileView {
   minimumNoticeMinutes: number;
   maxBookingDaysAhead: number | null;
   bufferMinutes: number;
+  /** Issue #151: "day-before" or "same-morning". Default is "day-before". */
+  reminderTiming: "day-before" | "same-morning";
   verifiedSessionCount: number;
   /** Issue #2: the provider's own cancellation count, shown beside the
    * verified-session line. An honest zero, never hidden. */
@@ -523,6 +534,7 @@ export function buildProviderProfileView(
     minimumNoticeMinutes: profile.minimumNoticeMinutes,
     maxBookingDaysAhead: profile.maxBookingDaysAhead,
     bufferMinutes: profile.bufferMinutes,
+    reminderTiming: (profile.reminderTiming as "day-before" | "same-morning") ?? "day-before",
     verifiedSessionCount: profile.verifiedSessionCount,
     providerCancellationCount: profile.providerCancellationCount,
     isApproved: profile.isApproved,
@@ -644,6 +656,7 @@ export async function updateProviderRules(
     cancellationWindowHours: input.cancellationWindowHours,
     maxBookingDaysAhead: input.maxBookingDaysAhead,
     bufferMinutes: input.bufferMinutes ?? 0,
+    reminderTiming: input.reminderTiming,
   });
   return getOwnProviderProfile(db, walletAddress);
 }

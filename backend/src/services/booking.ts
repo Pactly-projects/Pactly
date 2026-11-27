@@ -2109,6 +2109,33 @@ export interface BookingView {
   /** Issue #35: true when this read triggered showing a reminder (appointment
    * day-before notice). False when already shown or conditions not met. */
   reminderShown: boolean;
+  /** Issue #153: true when booking was cancelled or refunded, no further reminder will be sent. */
+  noFurtherReminder?: boolean;
+  /** Issue #152: true when client silenced reminders on this booking. */
+  clientReminderSilenced?: boolean;
+}
+
+/**
+ * Issue #153: Cancelled or refunded bookings must not send reminders.
+ * Returns true if the booking has been declined, hold released, escrow refunded,
+ * or lifecycle indicates refund/cancellation.
+ */
+export function isBookingCancelled(
+  booking: Pick<BookingRow, "escrowState" | "declinedAt" | "holdReleaseReason" | "holdReleasedAt">,
+  lifecycle?: { action?: string; outcome?: string } | null,
+): boolean {
+  if (booking.declinedAt !== null || booking.holdReleasedAt !== null || booking.holdReleaseReason !== null) {
+    return true;
+  }
+  if (booking.escrowState === "refunded") {
+    return true;
+  }
+  if (lifecycle) {
+    if (lifecycle.action === "refunded" || lifecycle.outcome !== undefined) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** `GET /bookings/:id`'s own response shape: the booking's amounts (each
@@ -2133,18 +2160,15 @@ export async function getBookingView(
   const slot = booking.slotId ? await getSlotById(db, booking.slotId) : undefined;
   const slotStartsAt = slot?.startsAt ?? null;
 
-  // Issue #35: check and mark reminder
+  // Issue #35 / #152 / #153: check and mark reminder
   let reminderShown = false;
   const isLocked = booking.escrowState === "locked";
   const hasSlot = slotStartsAt !== null;
   const within24h = hasSlot && slotStartsAt - now <= 24 * 60 * 60 && slotStartsAt - now > 0;
-  // `outcome` is only ever set once a dispute has been resolved (either
-  // side may have won), so any outcome means this booking is no longer a
-  // reminder candidate.
-  const notCancelled = lifecycle.outcome === undefined;
+  const isCancelled = isBookingCancelled(booking, lifecycle);
   const notDisputed = lifecycle.action !== "disputed";
 
-  if (isLocked && within24h && notCancelled && notDisputed) {
+  if (isLocked && within24h && !isCancelled && notDisputed && !booking.clientReminderSilenced) {
     // Client is reading, check client reminder
     if (booking.clientReminderShownAt === null) {
       await markClientReminderShown(db, bookingId, now);
@@ -2189,6 +2213,8 @@ export async function getBookingView(
     note: booking.note,
     holdReleasedReason: booking.holdReleaseReason,
     reminderShown,
+    noFurtherReminder: isCancelled,
+    clientReminderSilenced: Boolean(booking.clientReminderSilenced),
     disputeOpenedByWallet,
   };
 }
@@ -2475,6 +2501,10 @@ export interface BookingListItemBase {
   /** UTC epoch seconds -- when the provider marked the client as arrived,
    * `null` until marked. */
   arrivedAt: number | null;
+  /** Issue #153: no further reminders will be sent if cancelled */
+  noFurtherReminder?: boolean;
+  /** Issue #152: true if client silenced reminder */
+  clientReminderSilenced?: boolean;
 }
 
 export interface ClientBookingListItem extends BookingListItemBase {
@@ -2542,6 +2572,8 @@ function toBookingListItemBase(
     holdReleasedReason: booking.holdReleaseReason,
     isExpiredHold: isExpiredHoldRow(booking, now),
     arrivedAt: booking.arrivedAt,
+    noFurtherReminder: isBookingCancelled(booking, lifecycle),
+    clientReminderSilenced: Boolean(booking.clientReminderSilenced),
   };
 }
 
@@ -2575,17 +2607,24 @@ export async function listBookingsForClient(
   const profiles = await Promise.all(providerIds.map((id) => getProviderProfileById(db, id)));
   const profileById = new Map(profiles.filter((profile): profile is NonNullable<typeof profile> => Boolean(profile)).map((profile) => [profile.id, profile]));
 
-  // Issue #35: check and mark client reminders
+  // Issue #35 / #152 / #153: check and mark client reminders
   const remindersShown = new Set<string>();
   for (const { booking, slotStartsAt } of rows) {
     const lifecycle = lifecycleByBooking.get(booking.id);
     const isLocked = booking.escrowState === "locked";
     const hasSlot = slotStartsAt !== null;
     const within24h = hasSlot && slotStartsAt - now <= 24 * 60 * 60 && slotStartsAt - now > 0;
-    const notCancelled = lifecycle?.outcome === undefined;
+    const isCancelled = isBookingCancelled(booking, lifecycle);
     const notDisputed = lifecycle?.action !== "disputed";
 
-    if (isLocked && within24h && notCancelled && notDisputed && booking.clientReminderShownAt === null) {
+    if (
+      isLocked &&
+      within24h &&
+      !isCancelled &&
+      notDisputed &&
+      !booking.clientReminderSilenced &&
+      booking.clientReminderShownAt === null
+    ) {
       await markClientReminderShown(db, booking.id, now);
       remindersShown.add(booking.id);
     }
@@ -2631,17 +2670,27 @@ export async function listBookingsForProvider(
     rows.map((row) => row.booking),
   );
 
-  // Issue #35: check and mark provider reminders
+  // Issue #35 / #151 / #153: check and mark provider reminders
+  const timing = profile.reminderTiming ?? "day-before";
   const remindersShown = new Set<string>();
   for (const { booking, slotStartsAt } of rows) {
     const lifecycle = lifecycleByBooking.get(booking.id);
     const isLocked = booking.escrowState === "locked";
     const hasSlot = slotStartsAt !== null;
-    const within24h = hasSlot && slotStartsAt - now <= 24 * 60 * 60 && slotStartsAt - now > 0;
-    const notCancelled = lifecycle?.outcome === undefined;
+    let withinWindow = false;
+    if (hasSlot && slotStartsAt > now) {
+      if (timing === "same-morning") {
+        const slotDate = new Date(slotStartsAt * 1000).toISOString().slice(0, 10);
+        const nowDate = new Date(now * 1000).toISOString().slice(0, 10);
+        withinWindow = slotDate === nowDate;
+      } else {
+        withinWindow = slotStartsAt - now <= 24 * 60 * 60;
+      }
+    }
+    const isCancelled = isBookingCancelled(booking, lifecycle);
     const notDisputed = lifecycle?.action !== "disputed";
 
-    if (isLocked && within24h && notCancelled && notDisputed && booking.providerReminderShownAt === null) {
+    if (isLocked && withinWindow && !isCancelled && notDisputed && booking.providerReminderShownAt === null) {
       await markProviderReminderShown(db, booking.id, now);
       remindersShown.add(booking.id);
     }

@@ -1,10 +1,14 @@
 import { formatSlotDay, formatSlotTime } from "./time";
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export interface ReleaseMailtoInput {
   /** Escrow state from the booking payload. Mailto only when `"released"`. */
   escrowState: "locked" | "released" | "refunded" | null;
   /** Optional client email on the booking. Absent/empty → no mailto. */
   clientEmail: string | null | undefined;
+  /** Issue #150: Optional one-off recipient typed by the shop on release. */
+  oneOffRecipient?: string | null | undefined;
   /** Shop / provider display name included in the draft. */
   shopName: string;
   /** UTC epoch seconds for the appointment, or null when unknown. */
@@ -17,12 +21,23 @@ export interface ReleaseMailtoInput {
  * Build a `mailto:` draft the shop can open after the deposit is released.
  * Pactly never sends mail — this only prepares a client-side mail draft.
  *
- * Returns `undefined` when the booking is not released or has no client email.
+ * Returns `undefined` when the booking is not released or has no valid recipient email.
  */
 export function buildReleaseMailto(input: ReleaseMailtoInput): string | undefined {
   if (input.escrowState !== "released") return undefined;
-  const email = input.clientEmail?.trim();
-  if (!email) return undefined;
+
+  let email: string | undefined;
+  if (input.oneOffRecipient !== undefined && input.oneOffRecipient !== null && input.oneOffRecipient.trim() !== "") {
+    const trimmed = input.oneOffRecipient.trim();
+    if (!EMAIL_REGEX.test(trimmed)) {
+      return undefined;
+    }
+    email = trimmed;
+  } else {
+    email = input.clientEmail?.trim();
+  }
+
+  if (!email || !EMAIL_REGEX.test(email)) return undefined;
 
   const shop = input.shopName.trim() || "the shop";
   const when =

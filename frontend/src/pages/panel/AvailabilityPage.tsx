@@ -180,6 +180,7 @@ export function AvailabilityPage() {
   const [depositRatePercentInput, setDepositRatePercentInput] = useState("");
   const [cancellationWindowInput, setCancellationWindowInput] = useState("");
   const [bufferMinutesInput, setBufferMinutesInput] = useState("");
+  const [reminderTimingInput, setReminderTimingInput] = useState<"day-before" | "same-morning">("day-before");
   const [maxBookingDaysInput, setMaxBookingDaysInput] = useState("");
   const [selectedSlots, setSelectedSlots] = useState<Set<number>>(new Set());
   const [closeDate, setCloseDate] = useState("");
@@ -205,6 +206,7 @@ export function AvailabilityPage() {
       setDepositRatePercentInput(String(profileQuery.data.depositRateBps / 100));
       setCancellationWindowInput(String(profileQuery.data.cancellationWindowHours));
       setBufferMinutesInput(String(profileQuery.data.bufferMinutes));
+      setReminderTimingInput(profileQuery.data.reminderTiming ?? "day-before");
       setMaxBookingDaysInput(
         profileQuery.data.maxBookingDaysAhead == null
           ? ""
@@ -274,6 +276,7 @@ export function AvailabilityPage() {
         cancellationWindowHours,
         maxBookingDaysAhead,
         bufferMinutes,
+        reminderTiming: reminderTimingInput,
       });
       // Only the rules form's own fields -- an unsaved slot selection in
       // the availability grid below must survive this save untouched. The
@@ -283,6 +286,7 @@ export function AvailabilityPage() {
       setDepositRatePercentInput(String(saved.depositRateBps / 100));
       setCancellationWindowInput(String(saved.cancellationWindowHours));
       setBufferMinutesInput(String(saved.bufferMinutes));
+      setReminderTimingInput(saved.reminderTiming ?? "day-before");
       setMaxBookingDaysInput(
         saved.maxBookingDaysAhead == null ? "" : String(saved.maxBookingDaysAhead),
       );
@@ -631,6 +635,17 @@ export function AvailabilityPage() {
               onChange={(event) => setBufferMinutesInput(event.target.value)}
             />
             {rulesErrorDetails?.bufferMinutes && <span className="field__error">{rulesErrorDetails.bufferMinutes}</span>}
+          </div>
+          <div className="field">
+            <label htmlFor="reminderTiming">Appointment reminder timing</label>
+            <select
+              id="reminderTiming"
+              value={reminderTimingInput}
+              onChange={(event) => setReminderTimingInput(event.target.value as "day-before" | "same-morning")}
+            >
+              <option value="day-before">Day before (default)</option>
+              <option value="same-morning">Morning of appointment</option>
+            </select>
           </div>
           <div className="field">
             <label htmlFor="maxBookingDaysAhead">Maximum days clients may book ahead</label>

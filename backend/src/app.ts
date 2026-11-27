@@ -127,6 +127,7 @@ import {
   releaseDeposit,
   resolveBookingDispute,
   resolveSubmitRole,
+  silenceClientReminder,
   submitBalancePayment,
   submitSignedTransaction,
   type BuildBalancePaymentDeps,
@@ -891,6 +892,10 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
               ? body.maxBookingDaysAhead
               : undefined,
         bufferMinutes: typeof body?.bufferMinutes === "number" ? body.bufferMinutes : 0,
+        reminderTiming:
+          body?.reminderTiming === "same-morning" || body?.reminderTiming === "day-before"
+            ? body.reminderTiming
+            : undefined,
       });
       return c.json(profile);
     } catch (error) {
@@ -1492,6 +1497,25 @@ export function createApp(db: Db, options: CreateAppOptions = {}): App {
     try {
       const view = await getBookingView(db, bookingId, c.get("walletAddress"));
       return c.json(view);
+    } catch (error) {
+      if (error instanceof BookingNotFoundError) {
+        return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);
+      }
+      throw error;
+    }
+  });
+
+  /** Issue #152: silence/unsilence reminder on one booking for the owning client. */
+  app.post("/bookings/:id/silence-reminder", requirePactlyAuth, async (c) => {
+    const bookingId = c.req.param("id");
+    if (!bookingId) {
+      return c.json({ code: "invalid_request", message: "booking id is required." }, 400);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const silenced = typeof body?.silenced === "boolean" ? body.silenced : true;
+    try {
+      await silenceClientReminder(db, bookingId, c.get("walletAddress"), silenced);
+      return c.json({ ok: true, silenced });
     } catch (error) {
       if (error instanceof BookingNotFoundError) {
         return c.json({ code: "BOOKING_NOT_FOUND", message: error.message }, 404);

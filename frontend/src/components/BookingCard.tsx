@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router";
 
 import { BookingActions } from "./BookingActions";
@@ -76,6 +77,12 @@ export interface BookingCardProps {
   declinedAt?: number | null;
   /** Provider view only: shows "Decline hold" for a live, unlocked hold. */
   canDecline?: boolean;
+  /** Issue #153: true when no further reminders will be sent (cancelled/refunded) */
+  noFurtherReminder?: boolean;
+  /** Issue #152: true when client silenced reminder */
+  clientReminderSilenced?: boolean;
+  /** Issue #152: toggle client silence */
+  onToggleSilence?: () => void;
 }
 
 /** The balance row's own three-state wording (Epic 3 context: "Balance
@@ -124,13 +131,18 @@ export function BookingCard({
   shopName,
   declinedAt,
   canDecline,
+  noFurtherReminder,
+  clientReminderSilenced,
+  onToggleSilence,
 }: BookingCardProps) {
   const declined = declinedAt != null;
+  const [oneOffEmail, setOneOffEmail] = useState("");
   const releaseMailto =
     viewer === "provider"
       ? buildReleaseMailto({
           escrowState,
           clientEmail,
+          oneOffRecipient: oneOffEmail,
           shopName: shopName ?? "",
           slotStartsAt,
           proofUrl: bookingProofUrl(id),
@@ -154,6 +166,12 @@ export function BookingCard({
       {holdReleasedReason === "shop-closed-date" && (
         <p className="booking-card__notice" role="status">
           The shop closed this date. No deposit was taken.
+        </p>
+      )}
+
+      {(noFurtherReminder || declined) && (
+        <p className="booking-card__notice" role="status">
+          No further reminder will be sent.
         </p>
       )}
 
@@ -244,10 +262,36 @@ export function BookingCard({
         <DeclineHoldButton id={id} session={session} onDeclined={onActionSubmitted} onUnauthorized={onUnauthorized} />
       )}
 
-      {releaseMailto && (
-        <a className="button-ghost" href={releaseMailto} style={{ marginTop: "var(--space-3)", textDecoration: "none", display: "inline-flex" }}>
-          Email the client
-        </a>
+      {viewer === "client" && onToggleSilence && !noFurtherReminder && !declined && (
+        <button
+          type="button"
+          className="button-ghost"
+          onClick={onToggleSilence}
+          style={{ marginTop: "var(--space-2)", fontSize: "0.875rem" }}
+        >
+          {clientReminderSilenced ? "Resume reminder" : "Silence reminder"}
+        </button>
+      )}
+
+      {viewer === "provider" && escrowState === "released" && (
+        <div style={{ marginTop: "var(--space-3)" }}>
+          <label style={{ display: "block", fontSize: "0.875rem", marginBottom: "var(--space-1)" }}>
+            Recipient email for note:
+            <input
+              type="email"
+              placeholder={clientEmail || "Recipient email"}
+              value={oneOffEmail}
+              onChange={(e) => setOneOffEmail(e.target.value)}
+              className="input-text"
+              style={{ display: "block", marginTop: "var(--space-1)", width: "100%" }}
+            />
+          </label>
+          {releaseMailto && (
+            <a className="button-ghost" href={releaseMailto} style={{ marginTop: "var(--space-2)", textDecoration: "none", display: "inline-flex" }}>
+              Email the client
+            </a>
+          )}
+        </div>
       )}
     </article>
   );

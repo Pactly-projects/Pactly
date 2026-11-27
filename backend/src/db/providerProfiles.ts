@@ -209,6 +209,8 @@ export interface ProviderRulesValues {
   minimumNoticeMinutes?: number;
   maxBookingDaysAhead?: number | null;
   bufferMinutes: number;
+  /** Issue #151: reminder timing ("day-before" or "same-morning"). */
+  reminderTiming?: "day-before" | "same-morning";
 }
 
 /** `services/profile.ts`'s `updateProviderRules` write path -- the one
@@ -350,6 +352,9 @@ export async function updateProviderProfileRules(db: Db, id: string, values: Pro
   }
   if (values.bufferMinutes !== undefined) {
     updateFields.bufferMinutes = values.bufferMinutes;
+  }
+  if (values.reminderTiming !== undefined) {
+    updateFields.reminderTiming = values.reminderTiming;
   }
   const result = await db
     .update(providerProfiles)

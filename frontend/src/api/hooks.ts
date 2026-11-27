@@ -174,6 +174,20 @@ export interface ProviderRulesInput {
   cancellationWindowHours: number;
   maxBookingDaysAhead: number | null;
   bufferMinutes: number;
+  reminderTiming?: "day-before" | "same-morning";
+}
+
+/** Issue #152: silence/unsilence client reminder on one booking */
+export async function silenceBookingReminder(
+  bookingId: string,
+  silenced: boolean,
+  session?: Session,
+): Promise<{ ok: boolean; silenced: boolean }> {
+  return apiPost<{ ok: boolean; silenced: boolean }>(
+    `/bookings/${bookingId}/silence-reminder`,
+    { silenced },
+    session?.token,
+  );
 }
 
 export function useUpdateProviderRules(session: Session | undefined) {

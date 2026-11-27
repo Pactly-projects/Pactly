@@ -60,6 +60,8 @@ export interface ProviderProfile {
   cancellationWindowHours: number;
   maxBookingDaysAhead: number | null;
   bufferMinutes: number;
+  /** Issue #151: reminder timing for provider */
+  reminderTiming?: "day-before" | "same-morning";
   verifiedSessionCount: number;
   /** Issue #2: shown beside the verified-session line; zero is shown. */
   providerCancellationCount: number;
@@ -258,6 +260,10 @@ export interface BookingView {
    * shop and the client on the booking detail page, never on the public
    * profile or discovery). */
   note: string | null;
+  /** Issue #153: true when no further reminders will be sent (cancelled/refunded) */
+  noFurtherReminder?: boolean;
+  /** Issue #152: true when client silenced reminders on this booking */
+  clientReminderSilenced?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +315,10 @@ export interface BookingListItemBase {
   /** UTC epoch seconds -- when the provider marked the client as arrived,
    * `null` until marked. */
   arrivedAt: number | null;
+  /** Issue #153: true when no further reminders will be sent (cancelled/refunded) */
+  noFurtherReminder?: boolean;
+  /** Issue #152: true when client silenced reminders on this booking */
+  clientReminderSilenced?: boolean;
 }
 
 export interface ClientBookingListItem extends BookingListItemBase {

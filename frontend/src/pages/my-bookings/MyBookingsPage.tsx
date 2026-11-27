@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { CalendarCheckIcon } from "@phosphor-icons/react";
 
-import { useMyBookings } from "../../api/hooks";
+import { silenceBookingReminder, useMyBookings } from "../../api/hooks";
 import { BookingCard } from "../../components/BookingCard";
 import { PageMasthead } from "../../components/PageMasthead";
 import { SignInPanel } from "../../components/SignInPanel";
@@ -23,6 +23,15 @@ export function MyBookingsPage() {
   function handleSignOut(): void {
     signOut();
     setSession(undefined);
+  }
+
+  async function handleToggleSilence(bookingId: string, currentSilenced: boolean): Promise<void> {
+    try {
+      await silenceBookingReminder(bookingId, !currentSilenced, session);
+      await bookingsQuery.refetch();
+    } catch {
+      // ignore
+    }
   }
 
   if (!session) {
@@ -115,6 +124,9 @@ export function MyBookingsPage() {
               onActionSubmitted={() => bookingsQuery.refetch()}
               onUnauthorized={handleSignOut}
               declinedAt={booking.declinedAt}
+              noFurtherReminder={booking.noFurtherReminder}
+              clientReminderSilenced={booking.clientReminderSilenced}
+              onToggleSilence={() => void handleToggleSilence(booking.id, Boolean(booking.clientReminderSilenced))}
               continueHref={
                 booking.escrowState === null && booking.declinedAt === null && booking.slotStartsAt !== null
                   ? `/book/${booking.provider.id}?slot=${booking.slotStartsAt}`

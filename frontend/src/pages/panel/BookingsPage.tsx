@@ -31,18 +31,32 @@ function ReleaseMailtoLink({
   slotStartsAt: number | null;
   bookingId: string;
 }) {
+  const [oneOff, setOneOff] = useState("");
   const mailto = buildReleaseMailto({
     escrowState,
     clientEmail,
+    oneOffRecipient: oneOff,
     shopName,
     slotStartsAt,
     proofUrl: bookingProofUrl(bookingId),
   });
-  if (!mailto) return null;
+  if (escrowState !== "released") return null;
   return (
-    <a className="button-ghost" href={mailto} style={{ textDecoration: "none", display: "inline-flex", marginTop: "var(--space-2)" }}>
-      Email the client
-    </a>
+    <div style={{ marginTop: "var(--space-2)" }}>
+      <input
+        type="email"
+        placeholder={clientEmail || "Recipient email"}
+        value={oneOff}
+        onChange={(e) => setOneOff(e.target.value)}
+        className="input-text"
+        style={{ fontSize: "0.8rem", padding: "2px 6px", width: "100%", marginBottom: "4px" }}
+      />
+      {mailto && (
+        <a className="button-ghost" href={mailto} style={{ textDecoration: "none", display: "inline-flex" }}>
+          Email the client
+        </a>
+      )}
+    </div>
   );
 }
 

@@ -53,6 +53,47 @@ test("buildReleaseMailto is absent when released but client email is missing", (
   }
 });
 
+test("buildReleaseMailto uses valid one-off recipient when provided", () => {
+  const href = buildReleaseMailto({
+    escrowState: "released",
+    clientEmail: "stored@example.com",
+    oneOffRecipient: "oneoff@example.com",
+    shopName: "North Barber",
+    slotStartsAt: SLOT,
+    proofUrl: PROOF,
+  });
+  assert.ok(href?.includes("mailto:oneoff@example.com"), "must use one-off email");
+  assert.ok(!href?.includes("stored@example.com"), "must not use stored email when one-off provided");
+});
+
+test("buildReleaseMailto falls back to stored email when one-off recipient is blank", () => {
+  for (const oneOffRecipient of [undefined, null, "", "   "] as const) {
+    const href = buildReleaseMailto({
+      escrowState: "released",
+      clientEmail: "stored@example.com",
+      oneOffRecipient,
+      shopName: "North Barber",
+      slotStartsAt: SLOT,
+      proofUrl: PROOF,
+    });
+    assert.ok(href?.includes("mailto:stored@example.com"), "must fall back to stored email");
+  }
+});
+
+test("buildReleaseMailto refuses invalid email as one-off recipient", () => {
+  for (const oneOffRecipient of ["notanemail", "invalid@", "@invalid.com", "foo@bar"] as const) {
+    const href = buildReleaseMailto({
+      escrowState: "released",
+      clientEmail: "stored@example.com",
+      oneOffRecipient,
+      shopName: "North Barber",
+      slotStartsAt: SLOT,
+      proofUrl: PROOF,
+    });
+    assert.equal(href, undefined, `invalid email "${oneOffRecipient}" must be refused`);
+  }
+});
+
 test("bookingProofUrl joins origin and booking id", () => {
   assert.equal(bookingProofUrl("abc123", "https://pactly.example/"), "https://pactly.example/proof/abc123");
   assert.equal(bookingProofUrl("abc123", "https://pactly.example"), "https://pactly.example/proof/abc123");

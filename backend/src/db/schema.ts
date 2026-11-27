@@ -99,6 +99,8 @@ export const providerProfiles = sqliteTable("provider_profiles", {
   /** Minutes kept free after a locked booking before another slot may be
    * offered (0-120). Does not change weekly hours or move existing locks. */
   bufferMinutes: integer("buffer_minutes").notNull().default(0),
+  /** Issue #151: shop choice of reminder timing: "day-before" (default) or "same-morning". */
+  reminderTiming: text("reminder_timing", { enum: ["day-before", "same-morning"] }).notNull().default("day-before"),
   isApproved: integer("is_approved", { mode: "boolean" }).notNull().default(false),
   suspendedAt: integer("suspended_at"),
   suspensionReason: text("suspension_reason"),
@@ -464,6 +466,8 @@ export const bookings = sqliteTable("bookings", {
    */
   declinedAt: integer("declined_at"),
   clientReminderShownAt: integer("client_reminder_shown_at"),
+  /** Issue #152: client choice to silence reminder on this booking. */
+  clientReminderSilenced: integer("client_reminder_silenced", { mode: "boolean" }).notNull().default(false),
   /** Issue #35: UTC epoch seconds when provider reminder was shown. Set once,
    * never cleared. When null and appointment is within 24h, reminder is
    * shown to provider. */
